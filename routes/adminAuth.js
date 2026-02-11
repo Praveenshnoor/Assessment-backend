@@ -18,7 +18,10 @@ router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        console.log('[ADMIN LOGIN] Attempt:', { email, passwordLength: password?.length });
+
         if (!email || !password) {
+            console.log('[ADMIN LOGIN] Missing credentials');
             return res.status(400).json({
                 success: false,
                 message: 'Email and password are required',
@@ -31,7 +34,10 @@ router.post('/login', async (req, res) => {
             [email]
         );
 
+        console.log('[ADMIN LOGIN] Query result:', { found: result.rows.length > 0, email });
+
         if (result.rows.length === 0) {
+            console.log('[ADMIN LOGIN] Admin not found');
             return res.status(401).json({
                 success: false,
                 message: 'Invalid credentials',
@@ -39,10 +45,14 @@ router.post('/login', async (req, res) => {
         }
 
         const admin = result.rows[0];
+        console.log('[ADMIN LOGIN] Admin found:', { id: admin.id, email: admin.email, hashPreview: admin.password_hash?.substring(0, 20) });
 
         // 2. Validate password
         const isMatch = await bcrypt.compare(password, admin.password_hash);
+        console.log('[ADMIN LOGIN] Password match:', isMatch);
+        
         if (!isMatch) {
+            console.log('[ADMIN LOGIN] Password mismatch');
             return res.status(401).json({
                 success: false,
                 message: 'Invalid credentials',
@@ -56,6 +66,8 @@ router.post('/login', async (req, res) => {
             { expiresIn: '24h' }
         );
 
+        console.log('[ADMIN LOGIN] Success:', { email: admin.email });
+
         return res.json({
             success: true,
             message: 'Login successful',
@@ -68,7 +80,7 @@ router.post('/login', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Admin login error:', error);
+        console.error('[ADMIN LOGIN] Error:', error);
         return res.status(500).json({
             success: false,
             message: 'Internal server error',
