@@ -34,6 +34,9 @@ const io = new Server(server, {
 });
 const PORT = process.env.PORT || 5000;
 
+// Trust proxy - Required for Render deployment to get correct client IP
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors({
