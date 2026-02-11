@@ -12,6 +12,8 @@ const apiLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   // Skip rate limiting for health checks
   skip: (req) => req.path.startsWith('/health'),
+  // Trust proxy for Render deployment
+  trustProxy: true,
 });
 
 // Strict rate limiter for authentication endpoints - 5 requests per 15 minutes
@@ -25,6 +27,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true, // Don't count successful requests
+  trustProxy: true,
 });
 
 // Test submission rate limiter - 10 submissions per hour (prevent spam)
@@ -37,6 +40,7 @@ const submissionLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  trustProxy: true,
 });
 
 // Proctoring frame rate limiter - 5 frames per second per student
@@ -50,6 +54,7 @@ const proctoringLimiter = rateLimit({
   standardHeaders: false,
   legacyHeaders: false,
   skipFailedRequests: true,
+  trustProxy: true,
 });
 
 module.exports = {
