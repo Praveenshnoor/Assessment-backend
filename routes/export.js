@@ -163,7 +163,13 @@ router.get('/results', verifyAdmin, async (req, res) => {
 router.get('/colleges', verifyAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT DISTINCT college_name FROM students WHERE college_name IS NOT NULL AND college_name != \'\' ORDER BY college_name'
+      `SELECT DISTINCT 
+        CASE 
+          WHEN college_name IS NULL OR college_name = '' THEN 'Not Specified'
+          ELSE college_name 
+        END as college_name 
+      FROM students 
+      ORDER BY college_name`
     );
     const colleges = result.rows.map(row => row.college_name);
     res.json({ success: true, colleges });
@@ -178,14 +184,31 @@ router.get('/students', verifyAdmin, async (req, res) => {
     const { colleges } = req.query;
     console.log('Exporting students for colleges:', colleges);
 
-    let queryText = `SELECT id, full_name, roll_number, email, phone, address, college_name, course, specialization FROM students`;
+    let queryText = `SELECT id, full_name, roll_number, email, 
+      COALESCE(phone, 'N/A') as phone, 
+      COALESCE(address, 'N/A') as address, 
+      COALESCE(college_name, 'Not Specified') as college_name, 
+      COALESCE(course, 'N/A') as course, 
+      COALESCE(specialization, 'N/A') as specialization 
+    FROM students`;
     const queryParams = [];
 
     if (colleges && colleges !== 'ALL') {
       const collegeList = colleges.split(',').map(c => c.trim());
       if (collegeList.length > 0) {
-        queryText += ` WHERE college_name = ANY($1)`;
-        queryParams.push(collegeList);
+        // Handle "Not Specified" case
+        const hasNotSpecified = collegeList.includes('Not Specified');
+        const otherColleges = collegeList.filter(c => c !== 'Not Specified');
+        
+        if (hasNotSpecified && otherColleges.length > 0) {
+          queryText += ` WHERE (college_name = ANY($1) OR college_name IS NULL OR college_name = '')`;
+          queryParams.push(otherColleges);
+        } else if (hasNotSpecified) {
+          queryText += ` WHERE (college_name IS NULL OR college_name = '')`;
+        } else {
+          queryText += ` WHERE college_name = ANY($1)`;
+          queryParams.push(collegeList);
+        }
       }
     }
 
