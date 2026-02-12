@@ -426,4 +426,119 @@ router.get('/:testId/assignments', verifyAdmin, async (req, res) => {
     }
 });
 
+/**
+ * GET /api/tests/:testId/job-roles
+ * Get all job roles for a specific test
+ */
+router.get('/:testId/job-roles', async (req, res) => {
+    try {
+        const { testId } = req.params;
+        
+        const result = await pool.query(`
+            SELECT 
+                id,
+                job_role,
+                job_description,
+                is_default
+            FROM test_job_roles
+            WHERE test_id = $1
+            ORDER BY is_default DESC, job_role ASC
+        `, [testId]);
+
+        res.json({
+            success: true,
+            test_id: parseInt(testId),
+            job_roles: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching job roles:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch job roles',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * POST /api/tests/:testId/job-roles
+ * Add or update multiple job roles for a test
+ */
+router.post('/:testId/job-roles', verifyAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { testId } = req.params;
+        const { job_roles } = req.body;
+
+        if (!job_roles || !Array.isArray(job_roles) || job_roles.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'job_roles array is required'
+            });
+        }
+
+        // Verify test exists
+        const testCheck = await client.query('SELECT id FROM tests WHERE id = $1', [testId]);
+        if (testCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        await client.query('BEGIN');
+
+        // Create table if it doesn't exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS test_job_roles (
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                job_role VARCHAR(255) NOT NULL,
+                job_description TEXT,
+                is_default BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(test_id, job_role)
+            )
+        `);
+
+        // Delete existing job roles for this test
+        await client.query('DELETE FROM test_job_roles WHERE test_id = $1', [testId]);
+
+        // Insert new job roles
+        for (let i = 0; i < job_roles.length; i++) {
+            const role = job_roles[i];
+            await client.query(`
+                INSERT INTO test_job_roles (test_id, job_role, job_description, is_default)
+                VALUES ($1, $2, $3, $4)
+            `, [testId, role.job_role, role.job_description || '', i === 0]);
+        }
+
+        // Update the default job role in tests table for backward compatibility
+        if (job_roles.length > 0) {
+            await client.query(
+                'UPDATE tests SET job_role = $1, description = $2 WHERE id = $3',
+                [job_roles[0].job_role, job_roles[0].job_description || '', testId]
+            );
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: `Successfully added ${job_roles.length} job role(s)`,
+            count: job_roles.length
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error adding job roles:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add job roles',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;

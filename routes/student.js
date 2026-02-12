@@ -104,6 +104,59 @@ router.get('/tests', verifyToken, async (req, res) => {
             };
         });
 
+        // Fetch job roles for all tests (if table exists)
+        const testIds = assignedTests.map(t => t.id);
+        console.log('=== FETCHING JOB ROLES ===');
+        console.log('Test IDs:', testIds);
+        
+        if (testIds.length > 0) {
+            try {
+                const jobRolesResult = await pool.query(`
+                    SELECT test_id, job_role, job_description, is_default
+                    FROM test_job_roles
+                    WHERE test_id = ANY($1)
+                    ORDER BY test_id, is_default DESC, job_role ASC
+                `, [testIds]);
+
+                console.log('Job roles query result:', jobRolesResult.rows.length, 'rows');
+                console.log('Job roles data:', JSON.stringify(jobRolesResult.rows, null, 2));
+
+                // Group job roles by test_id
+                const jobRolesByTest = {};
+                jobRolesResult.rows.forEach(role => {
+                    if (!jobRolesByTest[role.test_id]) {
+                        jobRolesByTest[role.test_id] = [];
+                    }
+                    jobRolesByTest[role.test_id].push({
+                        jobRole: role.job_role,
+                        jobDescription: role.job_description,
+                        isDefault: role.is_default
+                    });
+                });
+
+                console.log('Grouped job roles:', JSON.stringify(jobRolesByTest, null, 2));
+
+                // Add job roles to each test
+                const testsWithJobRoles = assignedTests.map(test => ({
+                    ...test,
+                    jobRoles: jobRolesByTest[test.id] || []
+                }));
+
+                console.log('Tests with job roles:', testsWithJobRoles.map(t => ({ id: t.id, title: t.title, jobRolesCount: t.jobRoles.length })));
+                console.log('Sending assigned tests to student:', testsWithJobRoles.length);
+
+                res.json({
+                    success: true,
+                    tests: testsWithJobRoles
+                });
+                return;
+            } catch (error) {
+                // Table might not exist yet, continue without job roles
+                console.log('Job roles table error:', error.message);
+                console.log('Error details:', error);
+            }
+        }
+
         console.log('Sending assigned tests to student:', assignedTests.length);
 
         res.json({

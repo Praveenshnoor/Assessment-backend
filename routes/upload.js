@@ -25,14 +25,24 @@ router.post('/questions', verifyAdmin, upload.single('file'), async (req, res) =
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
-        const { testName, jobRole, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status } = req.body;
+        const { testName, jobRoles, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status } = req.body;
         if (!testName) {
             return res.status(400).json({ success: false, message: 'Test Name is required' });
         }
 
+        // Parse jobRoles if it's a string (from FormData)
+        let parsedJobRoles = [];
+        if (jobRoles) {
+            try {
+                parsedJobRoles = typeof jobRoles === 'string' ? JSON.parse(jobRoles) : jobRoles;
+            } catch (e) {
+                parsedJobRoles = [{ job_role: jobRoles, job_description: testDescription || '' }];
+            }
+        }
+
         console.log('=== BULK UPLOAD REQUEST ===');
         console.log('Test Name:', testName);
-        console.log('Job Role:', jobRole);
+        console.log('Job Roles:', parsedJobRoles);
         console.log('Duration:', duration, 'Type:', typeof duration);
         console.log('Max Attempts:', maxAttempts, 'Type:', typeof maxAttempts);
         console.log('Passing Percentage:', passingPercentage, 'Type:', typeof passingPercentage);
@@ -94,13 +104,16 @@ router.post('/questions', verifyAdmin, upload.single('file'), async (req, res) =
         }
 
         // 1. Create Test with additional details
+        const defaultJobRole = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_role : '';
+        const defaultJobDescription = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_description : testDescription || '';
+        
         const testResult = await client.query(
             `INSERT INTO tests (title, job_role, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
                 testName,
-                jobRole || '',
-                testDescription || '', 
+                defaultJobRole,
+                defaultJobDescription, 
                 parseInt(duration) || 60,
                 parseInt(maxAttempts) || 1,
                 parseInt(passingPercentage) || 50,
@@ -110,6 +123,30 @@ router.post('/questions', verifyAdmin, upload.single('file'), async (req, res) =
             ]
         );
         const testId = testResult.rows[0].id;
+
+        // 1.5. Insert multiple job roles if provided
+        if (parsedJobRoles.length > 0) {
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS test_job_roles (
+                    id SERIAL PRIMARY KEY,
+                    test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                    job_role VARCHAR(255) NOT NULL,
+                    job_description TEXT,
+                    is_default BOOLEAN DEFAULT false,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(test_id, job_role)
+                )
+            `);
+
+            for (let i = 0; i < parsedJobRoles.length; i++) {
+                const role = parsedJobRoles[i];
+                await client.query(`
+                    INSERT INTO test_job_roles (test_id, job_role, job_description, is_default)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (test_id, job_role) DO NOTHING
+                `, [testId, role.job_role, role.job_description || '', i === 0]);
+            }
+        }
 
         // 2. Insert Questions
         let insertedCount = 0;
@@ -306,11 +343,17 @@ router.post('/question', verifyAdmin, async (req, res) => {
 router.post('/manual', verifyAdmin, async (req, res) => {
     const client = await pool.connect();
     try {
-        const { testName, jobRole, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status, questions } = req.body;
+        const { testName, jobRoles, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status, questions } = req.body;
+
+        // Parse jobRoles if needed
+        let parsedJobRoles = [];
+        if (jobRoles) {
+            parsedJobRoles = Array.isArray(jobRoles) ? jobRoles : JSON.parse(jobRoles);
+        }
 
         console.log('=== MANUAL UPLOAD REQUEST ===');
         console.log('Test Name:', testName);
-        console.log('Job Role:', jobRole);
+        console.log('Job Roles:', parsedJobRoles);
         console.log('Duration:', duration, 'Type:', typeof duration);
         console.log('Max Attempts:', maxAttempts, 'Type:', typeof maxAttempts);
         console.log('Passing Percentage:', passingPercentage, 'Type:', typeof passingPercentage);
@@ -343,13 +386,16 @@ router.post('/manual', verifyAdmin, async (req, res) => {
         }
 
         // Create test with additional details
+        const defaultJobRole = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_role : '';
+        const defaultJobDescription = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_description : testDescription || '';
+        
         const testResult = await client.query(
             `INSERT INTO tests (title, job_role, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
                 testName,
-                jobRole || '',
-                testDescription || '', 
+                defaultJobRole,
+                defaultJobDescription, 
                 parseInt(duration) || 60,
                 parseInt(maxAttempts) || 1,
                 parseInt(passingPercentage) || 50,
@@ -359,6 +405,30 @@ router.post('/manual', verifyAdmin, async (req, res) => {
             ]
         );
         const testId = testResult.rows[0].id;
+
+        // Insert multiple job roles if provided
+        if (parsedJobRoles.length > 0) {
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS test_job_roles (
+                    id SERIAL PRIMARY KEY,
+                    test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                    job_role VARCHAR(255) NOT NULL,
+                    job_description TEXT,
+                    is_default BOOLEAN DEFAULT false,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(test_id, job_role)
+                )
+            `);
+
+            for (let i = 0; i < parsedJobRoles.length; i++) {
+                const role = parsedJobRoles[i];
+                await client.query(`
+                    INSERT INTO test_job_roles (test_id, job_role, job_description, is_default)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (test_id, job_role) DO NOTHING
+                `, [testId, role.job_role, role.job_description || '', i === 0]);
+            }
+        }
 
         // Insert questions
         let insertedCount = 0;
