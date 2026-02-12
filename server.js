@@ -26,9 +26,19 @@ const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = requir
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
+
+// Socket.IO CORS configuration - Allow multiple origins
+const allowedSocketOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+    'http://localhost:5173',
+    'https://assessment-shnoor-com.onrender.com',
+    'https://assessments.shnoor.com'
+].filter(Boolean);
+
 const io = new Server(server, {
     cors: {
-        origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+        origin: allowedSocketOrigins,
         credentials: true,
     }
 });
@@ -39,8 +49,27 @@ app.set('trust proxy', 1);
 
 // Middleware
 app.use(helmet()); // Security headers
+
+// CORS configuration - Allow multiple origins
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+    'http://localhost:5173',
+    'https://assessment-shnoor-com.onrender.com',
+    'https://assessments.shnoor.com'
+].filter(Boolean); // Remove undefined values
+
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
 }));
 app.use(express.json()); // Parse JSON bodies
