@@ -25,13 +25,14 @@ router.post('/questions', verifyAdmin, upload.single('file'), async (req, res) =
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
-        const { testName, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status } = req.body;
+        const { testName, jobRole, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status } = req.body;
         if (!testName) {
             return res.status(400).json({ success: false, message: 'Test Name is required' });
         }
 
         console.log('=== BULK UPLOAD REQUEST ===');
         console.log('Test Name:', testName);
+        console.log('Job Role:', jobRole);
         console.log('Duration:', duration, 'Type:', typeof duration);
         console.log('Max Attempts:', maxAttempts, 'Type:', typeof maxAttempts);
         console.log('Passing Percentage:', passingPercentage, 'Type:', typeof passingPercentage);
@@ -94,10 +95,11 @@ router.post('/questions', verifyAdmin, upload.single('file'), async (req, res) =
 
         // 1. Create Test with additional details
         const testResult = await client.query(
-            `INSERT INTO tests (title, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            `INSERT INTO tests (title, job_role, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
-                testName, 
+                testName,
+                jobRole || '',
                 testDescription || '', 
                 parseInt(duration) || 60,
                 parseInt(maxAttempts) || 1,
@@ -304,10 +306,11 @@ router.post('/question', verifyAdmin, async (req, res) => {
 router.post('/manual', verifyAdmin, async (req, res) => {
     const client = await pool.connect();
     try {
-        const { testName, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status, questions } = req.body;
+        const { testName, jobRole, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime, status, questions } = req.body;
 
         console.log('=== MANUAL UPLOAD REQUEST ===');
         console.log('Test Name:', testName);
+        console.log('Job Role:', jobRole);
         console.log('Duration:', duration, 'Type:', typeof duration);
         console.log('Max Attempts:', maxAttempts, 'Type:', typeof maxAttempts);
         console.log('Passing Percentage:', passingPercentage, 'Type:', typeof passingPercentage);
@@ -341,10 +344,11 @@ router.post('/manual', verifyAdmin, async (req, res) => {
 
         // Create test with additional details
         const testResult = await client.query(
-            `INSERT INTO tests (title, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            `INSERT INTO tests (title, job_role, description, duration, max_attempts, passing_percentage, start_datetime, end_datetime, status) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
-                testName, 
+                testName,
+                jobRole || '',
                 testDescription || '', 
                 parseInt(duration) || 60,
                 parseInt(maxAttempts) || 1,
