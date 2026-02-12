@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../config/db');
+const { pool, cachedQuery, clearCache } = require('../config/db');
 // const { cache } = require('../config/redis'); // DISABLED: Redis
 // const { cacheMiddleware } = require('../middleware/cache'); // DISABLED: Redis
 const verifyToken = require('../middleware/verifyToken');
@@ -275,8 +275,11 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
         }
 
         // 2. Fetch Questions (excluding correct_option to prevent cheating)
-        const questionsResult = await pool.query(`
-            SELECT 
+        // Use caching for questions since they don't change during exam
+        const cacheKey = `test_questions_${testId}`;
+        const questionsResult = await cachedQuery(
+            cacheKey,
+            `SELECT 
                 id, 
                 question_text as question, 
                 option_a, 
@@ -286,8 +289,10 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
                 marks
             FROM questions 
             WHERE test_id = $1
-            ORDER BY id ASC
-        `, [testId]);
+            ORDER BY id ASC`,
+            [testId],
+            15 * 60 * 1000 // Cache for 15 minutes
+        );
 
         // Transform questions to frontend format
         const questions = questionsResult.rows.map(q => ({
