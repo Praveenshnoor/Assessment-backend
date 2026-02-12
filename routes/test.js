@@ -46,6 +46,7 @@ router.get('/', verifyAdmin, async (req, res) => {
                 t.id,
                 t.title,
                 t.description,
+                t.job_role,
                 t.created_at,
                 t.status,
                 t.duration,
@@ -55,7 +56,7 @@ router.get('/', verifyAdmin, async (req, res) => {
                 COUNT(q.id) as question_count
             FROM tests t
             LEFT JOIN questions q ON t.id = q.test_id
-            GROUP BY t.id, t.title, t.description, t.created_at, t.status, t.duration, t.max_attempts, t.start_datetime, t.end_datetime
+            GROUP BY t.id, t.title, t.description, t.job_role, t.created_at, t.status, t.duration, t.max_attempts, t.start_datetime, t.end_datetime
             ORDER BY t.created_at DESC
         `);
 
@@ -115,6 +116,49 @@ router.put('/:id/status', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to update test status',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * PUT /api/tests/:id/job-details
+ * Update job role and description for a test
+ */
+router.put('/:id/job-details', verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { job_role, description } = req.body;
+
+        if (!job_role || job_role.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Job role is required'
+            });
+        }
+
+        const result = await pool.query(
+            'UPDATE tests SET job_role = $1, description = $2 WHERE id = $3 RETURNING *',
+            [job_role.trim(), description ? description.trim() : '', id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Job details updated successfully',
+            test: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Error updating job details:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update job details',
             error: error.message
         });
     }
