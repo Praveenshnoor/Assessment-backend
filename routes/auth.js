@@ -10,10 +10,9 @@ const verifyToken = require('../middleware/verifyToken');
  */
 router.post('/register', verifyToken, async (req, res) => {
     try {
-        const { full_name, email, roll_number, institute } = req.body;
-        const firebase_uid = req.firebaseUid; // From verifyToken middleware
+        const { full_name, email, roll_number, institute, phone, address, college_name, course, specialization } = req.body;
+        const firebase_uid = req.firebaseUid;
 
-        // Validate required fields
         if (!full_name || !email || !roll_number || !institute) {
             return res.status(400).json({
                 success: false,
@@ -21,7 +20,6 @@ router.post('/register', verifyToken, async (req, res) => {
             });
         }
 
-        // Normalize institute name to lowercase for consistency
         const normalizedInstitute = institute.trim().toLowerCase();
 
         // Check if user already exists
@@ -55,12 +53,11 @@ router.post('/register', verifyToken, async (req, res) => {
             }
         }
 
-        // Insert new student into database
         const result = await query(
-            `INSERT INTO students (firebase_uid, full_name, email, roll_number, institute) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING id, firebase_uid, full_name, email, roll_number, institute, created_at`,
-            [firebase_uid, full_name, email, roll_number, normalizedInstitute]
+            `INSERT INTO students (firebase_uid, full_name, email, roll_number, institute, phone, address, college_name, course, specialization) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+       RETURNING id, firebase_uid, full_name, email, roll_number, institute, phone, address, college_name, course, specialization, created_at`,
+            [firebase_uid, full_name, email, roll_number, normalizedInstitute, phone, address, college_name, course, specialization]
         );
 
         const newUser = result.rows[0];
@@ -75,6 +72,11 @@ router.post('/register', verifyToken, async (req, res) => {
                 email: newUser.email,
                 roll_number: newUser.roll_number,
                 institute: newUser.institute,
+                phone: newUser.phone,
+                address: newUser.address,
+                college_name: newUser.college_name,
+                course: newUser.course,
+                specialization: newUser.specialization,
                 created_at: newUser.created_at,
             },
         });
@@ -106,9 +108,8 @@ router.post('/login', verifyToken, async (req, res) => {
     try {
         const firebase_uid = req.firebaseUid; // From verifyToken middleware
 
-        // Fetch student profile from database
         const result = await query(
-            'SELECT id, firebase_uid, full_name, email, roll_number, institute, created_at FROM students WHERE firebase_uid = $1',
+            'SELECT id, firebase_uid, full_name, email, roll_number, institute, phone, address, college_name, course, specialization, created_at FROM students WHERE firebase_uid = $1',
             [firebase_uid]
         );
 
@@ -131,6 +132,11 @@ router.post('/login', verifyToken, async (req, res) => {
                 email: student.email,
                 roll_number: student.roll_number,
                 institute: student.institute,
+                phone: student.phone,
+                address: student.address,
+                college_name: student.college_name,
+                course: student.course,
+                specialization: student.specialization,
                 created_at: student.created_at,
             },
         });
@@ -154,7 +160,7 @@ router.get('/profile', verifyToken, async (req, res) => {
         const firebase_uid = req.firebaseUid;
 
         const result = await query(
-            'SELECT id, firebase_uid, full_name, email, roll_number, institute, created_at FROM students WHERE firebase_uid = $1',
+            'SELECT id, firebase_uid, full_name, email, roll_number, institute, phone, address, college_name, course, specialization, created_at FROM students WHERE firebase_uid = $1',
             [firebase_uid]
         );
 

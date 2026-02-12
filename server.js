@@ -32,6 +32,7 @@ const allowedSocketOrigins = [
     process.env.FRONTEND_URL,
     process.env.CLIENT_URL,
     'http://localhost:5173',
+    'http://localhost:5174',
     'https://assessment-shnoor-com.onrender.com',
     'https://assessments.shnoor.com'
 ].filter(Boolean);
@@ -55,6 +56,7 @@ const allowedOrigins = [
     process.env.FRONTEND_URL,
     process.env.CLIENT_URL,
     'http://localhost:5173',
+    'http://localhost:5174',
     'https://assessment-shnoor-com.onrender.com',
     'https://assessments.shnoor.com'
 ].filter(Boolean); // Remove undefined values

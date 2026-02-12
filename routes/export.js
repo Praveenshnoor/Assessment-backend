@@ -160,4 +160,75 @@ router.get('/results', verifyAdmin, async (req, res) => {
   }
 });
 
+router.get('/colleges', verifyAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT DISTINCT college_name FROM students WHERE college_name IS NOT NULL AND college_name != \'\' ORDER BY college_name'
+    );
+    const colleges = result.rows.map(row => row.college_name);
+    res.json({ success: true, colleges });
+  } catch (error) {
+    console.error('Error fetching colleges:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch colleges' });
+  }
+});
+
+router.get('/students', verifyAdmin, async (req, res) => {
+  try {
+    const { colleges } = req.query;
+    console.log('Exporting students for colleges:', colleges);
+
+    let queryText = `SELECT id, full_name, roll_number, email, phone, address, college_name, course, specialization FROM students`;
+    const queryParams = [];
+
+    if (colleges && colleges !== 'ALL') {
+      const collegeList = colleges.split(',').map(c => c.trim());
+      if (collegeList.length > 0) {
+        queryText += ` WHERE college_name = ANY($1)`;
+        queryParams.push(collegeList);
+      }
+    }
+
+    queryText += ` ORDER BY college_name, full_name`;
+    const result = await pool.query(queryText, queryParams);
+    const students = result.rows;
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Student Report');
+
+    worksheet.columns = [
+      { header: 'Registration ID', key: 'roll_number', width: 15 },
+      { header: 'Name', key: 'full_name', width: 25 },
+      { header: 'Phone', key: 'phone', width: 15 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Address', key: 'address', width: 40 },
+      { header: 'College Name', key: 'college_name', width: 30 },
+      { header: 'Course', key: 'course', width: 15 },
+      { header: 'Specialization', key: 'specialization', width: 20 },
+    ];
+
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFF00' }
+    };
+
+    students.forEach(student => {
+      worksheet.addRow(student);
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="Students_Report.xlsx"');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error exporting students:', error);
+    res.status(500).json({ success: false, message: 'Failed to export students' });
+  }
+});
+
 module.exports = router;
