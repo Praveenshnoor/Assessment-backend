@@ -66,6 +66,11 @@ router.get('/tests', verifyToken, async (req, res) => {
             const startDate = test.start_datetime ? new Date(test.start_datetime) : null;
             const endDate = test.end_datetime ? new Date(test.end_datetime) : null;
             
+            console.log(`[Test ${test.id}] Checking availability:`);
+            console.log(`  Current time: ${now.toISOString()} (${now.getTime()})`);
+            console.log(`  Start time: ${startDate ? startDate.toISOString() + ' (' + startDate.getTime() + ')' : 'null'}`);
+            console.log(`  End time: ${endDate ? endDate.toISOString() + ' (' + endDate.getTime() + ')' : 'null'}`);
+            
             let isAvailable = true;
             let availabilityMessage = '';
             let testStatus = 'available';
@@ -74,10 +79,14 @@ router.get('/tests', verifyToken, async (req, res) => {
                 isAvailable = false;
                 testStatus = 'upcoming';
                 availabilityMessage = `Available from ${startDate.toLocaleString()}`;
+                console.log(`  Status: UPCOMING (now < start)`);
             } else if (endDate && now > endDate) {
                 isAvailable = false;
                 testStatus = 'expired';
                 availabilityMessage = `Expired on ${endDate.toLocaleString()}`;
+                console.log(`  Status: EXPIRED (now > end)`);
+            } else {
+                console.log(`  Status: AVAILABLE`);
             }
 
             return {
