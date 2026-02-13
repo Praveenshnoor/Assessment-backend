@@ -101,8 +101,8 @@ const createTables = async () => {
                 description TEXT,
                 duration INTEGER DEFAULT 60,
                 max_attempts INTEGER DEFAULT 1,
-                start_datetime TIMESTAMP,
-                end_datetime TIMESTAMP,
+                start_datetime TIMESTAMPTZ,
+                end_datetime TIMESTAMPTZ,
                 status VARCHAR(20) DEFAULT 'draft',
                 is_published BOOLEAN DEFAULT false,
                 passing_percentage INTEGER DEFAULT 50,
@@ -111,6 +111,7 @@ const createTables = async () => {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
+
 
         // Indices for tests
         await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);`);
