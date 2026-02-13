@@ -62,29 +62,32 @@ router.get('/tests', verifyToken, async (req, res) => {
             const hasAttemptsLeft = attemptsRemaining > 0;
 
             // Check if test is within available time window
-            const now = new Date();
+            // Convert all times to UTC timestamps for accurate comparison
+            const nowUTC = Date.now(); // Current time in milliseconds (UTC)
             const startDate = test.start_datetime ? new Date(test.start_datetime) : null;
             const endDate = test.end_datetime ? new Date(test.end_datetime) : null;
+            const startUTC = startDate ? startDate.getTime() : null;
+            const endUTC = endDate ? endDate.getTime() : null;
             
             console.log(`[Test ${test.id}] Checking availability:`);
-            console.log(`  Current time: ${now.toISOString()} (${now.getTime()})`);
-            console.log(`  Start time: ${startDate ? startDate.toISOString() + ' (' + startDate.getTime() + ')' : 'null'}`);
-            console.log(`  End time: ${endDate ? endDate.toISOString() + ' (' + endDate.getTime() + ')' : 'null'}`);
+            console.log(`  Current time (UTC): ${new Date(nowUTC).toISOString()}`);
+            console.log(`  Start time (UTC): ${startDate ? startDate.toISOString() : 'null'}`);
+            console.log(`  End time (UTC): ${endDate ? endDate.toISOString() : 'null'}`);
             
             let isAvailable = true;
             let availabilityMessage = '';
             let testStatus = 'available';
             
-            if (startDate && now < startDate) {
+            if (startUTC && nowUTC < startUTC) {
                 isAvailable = false;
                 testStatus = 'upcoming';
                 availabilityMessage = `Available from ${startDate.toLocaleString()}`;
-                console.log(`  Status: UPCOMING (now < start)`);
-            } else if (endDate && now > endDate) {
+                console.log(`  Status: UPCOMING (${nowUTC} < ${startUTC})`);
+            } else if (endUTC && nowUTC > endUTC) {
                 isAvailable = false;
                 testStatus = 'expired';
                 availabilityMessage = `Expired on ${endDate.toLocaleString()}`;
-                console.log(`  Status: EXPIRED (now > end)`);
+                console.log(`  Status: EXPIRED (${nowUTC} > ${endUTC})`);
             } else {
                 console.log(`  Status: AVAILABLE`);
             }
