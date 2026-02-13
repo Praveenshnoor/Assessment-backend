@@ -38,10 +38,34 @@ const allowedSocketOrigins = [
     'https://assessments.shnoor.com'
 ].filter(Boolean);
 
+// Socket.IO CORS configuration - Allow multiple origins
+const allowedSocketOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CLIENT_URL,
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://assessment-shnoor-com.onrender.com',
+    'https://assessments.shnoor.com'
+].filter(Boolean);
+
 const io = new Server(server, {
     cors: {
         origin: allowedSocketOrigins,
         credentials: true,
+    },
+    // Connection timeout and reliability settings
+    pingTimeout: 60000, // 60 seconds - how long to wait for pong response
+    pingInterval: 25000, // 25 seconds - how often to send ping
+    upgradeTimeout: 30000, // 30 seconds - time to wait for upgrade
+    allowUpgrades: true,
+    transports: ['websocket', 'polling'], // Allow fallback to polling
+    // Connection limits and cleanup
+    maxHttpBufferSize: 1e6, // 1MB max buffer size
+    allowEIO3: true, // Allow Engine.IO v3 clients
+    // Compression settings for better performance
+    compression: true,
+    perMessageDeflate: {
+        threshold: 1024, // Only compress messages > 1KB
     }
 });
 const PORT = process.env.PORT || 5000;
@@ -96,6 +120,7 @@ app.use('/api/student', studentRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/institutes', institutesRoutes);
+
 // Health monitoring routes
 app.use('/', healthRoutes);
 
@@ -244,6 +269,51 @@ let rotationInterval = setInterval(() => {
 io.on('connection', (socket) => {
     logger.debug({ socketId: socket.id }, 'Socket.io client connected');
 
+    // Connection timeout handling
+    const connectionTimeout = setTimeout(() => {
+        if (!socket.studentId && !socket.isAdmin) {
+            logger.warn({ socketId: socket.id }, 'Socket connection timeout - no identification received');
+            socket.emit('connection-timeout', { message: 'Connection timeout - please refresh and try again' });
+            socket.disconnect(true);
+        }
+    }, 30000); // 30 seconds to identify
+
+    // Error handling
+    socket.on('error', (error) => {
+        logger.error({ 
+            socketId: socket.id, 
+            studentId: socket.studentId,
+            error: error.message,
+            stack: error.stack 
+        }, 'Socket.io error occurred');
+        
+        // Emit error to client for handling
+        socket.emit('socket-error', { 
+            message: 'Connection error occurred', 
+            shouldReconnect: true 
+        });
+    });
+
+    // Connection health check
+    socket.on('ping', (callback) => {
+        if (typeof callback === 'function') {
+            callback('pong');
+        }
+    });
+
+    // Handle reconnection
+    socket.on('reconnect-request', (data) => {
+        logger.info({ 
+            socketId: socket.id, 
+            studentId: data?.studentId 
+        }, 'Client requesting reconnection');
+        
+        socket.emit('reconnect-approved', { 
+            message: 'Reconnection approved',
+            timestamp: new Date().toISOString()
+        });
+    });
+
     // Student joins proctoring session
     socket.on('student:join-proctoring', (data) => {
         const { studentId, studentName, testId, testTitle } = data;
@@ -363,28 +433,162 @@ io.on('connection', (socket) => {
         socket.emit('pong');
     });
 
-    // Disconnect handling
-    socket.on('disconnect', () => {
-        logger.debug({ socketId: socket.id }, 'Socket.io client disconnected');
+    // Disconnect handling with comprehensive cleanup
+    socket.on('disconnect', (reason) => {
+        logger.debug({ 
+            socketId: socket.id, 
+            studentId: socket.studentId,
+            isAdmin: socket.isAdmin,
+            reason 
+        }, 'Socket.io client disconnected');
+
+        // Clear any pending timeouts
+        clearTimeout(connectionTimeout);
 
         if (socket.isAdmin) {
             adminSockets.delete(socket.id);
-            logger.info({ socketId: socket.id }, 'Admin left monitoring room');
+            logger.info({ socketId: socket.id, reason }, 'Admin left monitoring room');
+            
+            // Notify remaining admins
+            io.to('admin-room').emit('admin:left', {
+                socketId: socket.id,
+                timestamp: new Date(),
+                reason
+            });
+            
         } else if (socket.studentId) {
             const session = activeSessions.get(socket.studentId);
             if (session) {
-                logger.info({ studentId: socket.studentId, studentName: session.studentName }, 'Student disconnected');
+                logger.info({ 
+                    studentId: socket.studentId, 
+                    studentName: session.studentName,
+                    reason,
+                    duration: new Date() - session.startTime
+                }, 'Student disconnected');
                 
-                // Notify admins
+                // Remove from monitoring if they were being monitored
+                monitoredStudents.delete(socket.studentId);
+                
+                // Notify admins with disconnect reason
                 io.to('admin-room').emit('student:left', {
                     studentId: socket.studentId,
                     studentName: session.studentName,
+                    reason,
+                    timestamp: new Date(),
+                    sessionDuration: new Date() - session.startTime
                 });
 
+                // Clean up session
                 activeSessions.delete(socket.studentId);
+                
+                // Reselect monitored students after someone leaves
+                if (activeSessions.size > 0) {
+                    selectStudentsForMonitoring();
+                }
             }
         }
     });
+
+    // Handle connection errors specifically
+    socket.on('connect_error', (error) => {
+        logger.error({ 
+            socketId: socket.id,
+            studentId: socket.studentId,
+            error: error.message 
+        }, 'Socket.io connection error');
+    });
+
+    // Handle client-side errors
+    socket.on('client-error', (errorData) => {
+        logger.error({ 
+            socketId: socket.id,
+            studentId: socket.studentId,
+            clientError: errorData 
+        }, 'Client-side error reported');
+        
+        // Optionally notify admins of client issues
+        if (socket.studentId) {
+            io.to('admin-room').emit('student:error', {
+                studentId: socket.studentId,
+                error: errorData,
+                timestamp: new Date()
+            });
+        }
+    });
+});
+
+// Connection Health Monitoring System
+const CONNECTION_HEALTH_INTERVAL = 30000; // 30 seconds
+const CONNECTION_TIMEOUT_THRESHOLD = 60000; // 60 seconds
+
+setInterval(() => {
+    const now = new Date();
+    const staleConnections = [];
+    
+    // Check for stale connections
+    activeSessions.forEach((session, studentId) => {
+        const socket = io.sockets.sockets.get(session.socketId);
+        
+        if (!socket || !socket.connected) {
+            staleConnections.push(studentId);
+        } else if (session.lastPing && (now - session.lastPing) > CONNECTION_TIMEOUT_THRESHOLD) {
+            // Connection seems stale, ping it
+            socket.emit('health-check', { timestamp: now.toISOString() });
+            
+            // If no response in 10 seconds, consider it stale
+            setTimeout(() => {
+                const currentSession = activeSessions.get(studentId);
+                if (currentSession && (!currentSession.lastPing || (new Date() - currentSession.lastPing) > CONNECTION_TIMEOUT_THRESHOLD)) {
+                    logger.warn({ studentId, socketId: session.socketId }, 'Removing stale connection');
+                    staleConnections.push(studentId);
+                }
+            }, 10000);
+        }
+    });
+    
+    // Clean up stale connections
+    staleConnections.forEach(studentId => {
+        const session = activeSessions.get(studentId);
+        if (session) {
+            logger.info({ studentId, studentName: session.studentName }, 'Cleaning up stale connection');
+            
+            // Notify admins
+            io.to('admin-room').emit('student:left', {
+                studentId,
+                studentName: session.studentName,
+                reason: 'connection_timeout',
+                timestamp: new Date()
+            });
+            
+            // Remove from monitoring and sessions
+            monitoredStudents.delete(studentId);
+            activeSessions.delete(studentId);
+        }
+    });
+    
+    // Reselect monitored students if any were removed
+    if (staleConnections.length > 0 && activeSessions.size > 0) {
+        selectStudentsForMonitoring();
+    }
+    
+    // Log connection health stats periodically
+    if (activeSessions.size > 0) {
+        logger.debug({
+            totalSessions: activeSessions.size,
+            monitoredStudents: monitoredStudents.size,
+            adminSockets: adminSockets.size,
+            staleConnectionsRemoved: staleConnections.length
+        }, 'Connection health check completed');
+    }
+}, CONNECTION_HEALTH_INTERVAL);
+
+// Add engine-level error handling
+io.engine.on('connection_error', (err) => {
+    logger.error({
+        error: err.message,
+        code: err.code,
+        context: err.context
+    }, 'Socket.IO engine connection error');
 });
 
 // Graceful shutdown

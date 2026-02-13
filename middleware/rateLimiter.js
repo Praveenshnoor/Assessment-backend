@@ -1,10 +1,9 @@
 const rateLimit = require('express-rate-limit');
 
-// General API rate limiter - Optimized for exam functionality
-// 300 requests per 15 minutes per IP (increased from 100)
+// 1000 requests per hour per IP (increased to handle exam + navigation)
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 300, // Increased to handle exam operations
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 1000, // Handles auto-save + navigation + other exam functions
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again later.',
@@ -14,37 +13,37 @@ const apiLimiter = rateLimit({
   skip: (req) => req.path.startsWith('/health') || req.path.startsWith('/metrics'),
 });
 
-// Strict rate limiter for authentication endpoints - 10 requests per 15 minutes
+// Authentication rate limiter - 150 requests per hour
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Increased from 5 to allow retries
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 150, // Sufficient for login attempts and session refreshes
   message: {
     success: false,
-    message: 'Too many authentication attempts, please try again after 15 minutes.',
+    message: 'Too many authentication attempts, please try again after some time.',
   },
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
 });
 
-// Test submission rate limiter - Optimized for multiple attempts
-// 20 submissions per hour (increased from 10)
+// Test submission rate limiter - 1000 requests per hour
+// Handles progress saves (every 30 seconds) + final submission + retries
 const submissionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20, // Increased to allow progress saves + final submission
+  max: 1000, // Allows 120 auto-saves + navigation + submission attempts
   message: {
     success: false,
-    message: 'Too many test submissions, please contact administrator.',
+    message: 'Too many requests, please try again later.',
   },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 // Proctoring frame rate limiter - 3 frames per second per student
-// Reduced from 5 to save bandwidth
+// NOTE: This is separate from hourly limits - proctoring data is handled independently
 const proctoringLimiter = rateLimit({
   windowMs: 1000, // 1 second
-  max: 3, // Reduced from 5 to save bandwidth
+  max: 3,
   message: {
     success: false,
     message: 'Frame rate exceeded, please reduce proctoring frame rate.',

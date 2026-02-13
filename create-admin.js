@@ -11,8 +11,8 @@ async function createAdmin() {
         console.log('🔐 Creating admin user...');
 
         // Admin credentials
-        const email = 'admin@shnoor.com';
-        const password = 'Admin@123'; // Change this to your desired password
+        const email = 'hr@shnoor.com';
+        const password = '12345678'; // Change this to your desired password
         const fullName = 'Shnoor Admin';
 
         // Hash the password
