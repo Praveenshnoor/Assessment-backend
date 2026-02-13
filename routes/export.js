@@ -160,59 +160,59 @@ router.get('/results', verifyAdmin, async (req, res) => {
   }
 });
 
-router.get('/colleges', verifyAdmin, async (req, res) => {
+router.get('/institutes', verifyAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT DISTINCT 
         CASE 
-          WHEN college_name IS NULL OR college_name = '' THEN 'Not Specified'
-          ELSE college_name 
-        END as college_name 
+          WHEN institute IS NULL OR institute = '' THEN 'Not Specified'
+          ELSE institute 
+        END as institute_name 
       FROM students 
-      ORDER BY college_name`
+      ORDER BY institute_name`
     );
-    const colleges = result.rows.map(row => row.college_name);
-    res.json({ success: true, colleges });
+    const institutes = result.rows.map(row => row.institute_name);
+    res.json({ success: true, institutes });
   } catch (error) {
-    console.error('Error fetching colleges:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch colleges' });
+    console.error('Error fetching institutes:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch institutes' });
   }
 });
 
 router.get('/students', verifyAdmin, async (req, res) => {
   try {
-    const { colleges } = req.query;
-    console.log('Exporting students for colleges:', colleges);
+    const { institutes } = req.query;
+    console.log('Exporting students for institutes:', institutes);
 
     let queryText = `SELECT id, full_name, roll_number, email, 
       COALESCE(phone, 'N/A') as phone, 
       COALESCE(address, 'N/A') as address, 
-      COALESCE(college_name, 'Not Specified') as college_name, 
+      COALESCE(institute, 'Not Specified') as institute_name, 
       COALESCE(course, 'N/A') as course, 
       COALESCE(specialization, 'N/A') as specialization 
     FROM students`;
     const queryParams = [];
 
-    if (colleges && colleges !== 'ALL') {
-      const collegeList = colleges.split(',').map(c => c.trim());
-      if (collegeList.length > 0) {
+    if (institutes && institutes !== 'ALL') {
+      const instituteList = institutes.split(',').map(c => c.trim());
+      if (instituteList.length > 0) {
         // Handle "Not Specified" case
-        const hasNotSpecified = collegeList.includes('Not Specified');
-        const otherColleges = collegeList.filter(c => c !== 'Not Specified');
+        const hasNotSpecified = instituteList.includes('Not Specified');
+        const otherInstitutes = instituteList.filter(c => c !== 'Not Specified');
         
-        if (hasNotSpecified && otherColleges.length > 0) {
-          queryText += ` WHERE (college_name = ANY($1) OR college_name IS NULL OR college_name = '')`;
-          queryParams.push(otherColleges);
+        if (hasNotSpecified && otherInstitutes.length > 0) {
+          queryText += ` WHERE (institute = ANY($1) OR institute IS NULL OR institute = '')`;
+          queryParams.push(otherInstitutes);
         } else if (hasNotSpecified) {
-          queryText += ` WHERE (college_name IS NULL OR college_name = '')`;
+          queryText += ` WHERE (institute IS NULL OR institute = '')`;
         } else {
-          queryText += ` WHERE college_name = ANY($1)`;
-          queryParams.push(collegeList);
+          queryText += ` WHERE institute = ANY($1)`;
+          queryParams.push(instituteList);
         }
       }
     }
 
-    queryText += ` ORDER BY college_name, full_name`;
+    queryText += ` ORDER BY institute, full_name`;
     const result = await pool.query(queryText, queryParams);
     const students = result.rows;
 
@@ -226,7 +226,7 @@ router.get('/students', verifyAdmin, async (req, res) => {
       { header: 'Phone', key: 'phone', width: 15 },
       { header: 'Email', key: 'email', width: 30 },
       { header: 'Address', key: 'address', width: 40 },
-      { header: 'College Name', key: 'college_name', width: 30 },
+      { header: 'Institute Name', key: 'institute_name', width: 30 },
       { header: 'Course', key: 'course', width: 15 },
       { header: 'Specialization', key: 'specialization', width: 20 },
     ];

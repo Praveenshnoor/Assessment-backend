@@ -1,3 +1,25 @@
+/**
+ * MCQ Exam Portal - Database Setup Script
+ * 
+ * This script creates the complete database schema for the MCQ exam portal,
+ * including all tables, indexes, and seed data needed for the application.
+ * 
+ * Features included:
+ * - Student management with profile fields
+ * - Admin authentication system
+ * - Test creation with job roles and scheduling
+ * - Question management and exam attempts
+ * - Progress tracking and auto-save functionality
+ * - Live proctoring sessions
+ * - Institute management
+ * - Performance indexes for 300+ concurrent users
+ * - Default admin account and seed data
+ * 
+ * Usage: node setup-database.js
+ * 
+ * Make sure to configure your .env file with database credentials before running.
+ */
+
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
@@ -15,7 +37,23 @@ const createTables = async () => {
     try {
         console.log('🔌 Connected to database...');
 
-        // 1. Create Students Table
+        // 1. Create Institutes Table (must be created before students)
+        console.log('Creating institutes table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS institutes (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255) NOT NULL,
+                created_by VARCHAR(255) DEFAULT 'admin',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true
+            );
+        `);
+
+        // Index for institutes
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_institutes_name ON institutes(LOWER(name));`);
+
+        // 2. Create Students Table
         console.log('Creating students table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS students (
@@ -25,6 +63,11 @@ const createTables = async () => {
                 email VARCHAR(255) UNIQUE NOT NULL,
                 roll_number VARCHAR(100) UNIQUE NOT NULL,
                 institute VARCHAR(255) NOT NULL,
+                phone VARCHAR(20),
+                address TEXT,
+                college_name VARCHAR(255),
+                course VARCHAR(100),
+                specialization VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -33,6 +76,8 @@ const createTables = async () => {
         // Indices for students
         await client.query(`CREATE INDEX IF NOT EXISTS idx_students_firebase_uid ON students(firebase_uid);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_students_roll_number ON students(roll_number);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_students_created_at ON students(created_at);`);
 
         // 2. Create Admins Table
         console.log('Creating admins table...');
@@ -54,12 +99,43 @@ const createTables = async () => {
                 id SERIAL PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 description TEXT,
+                duration INTEGER DEFAULT 60,
+                max_attempts INTEGER DEFAULT 1,
+                start_datetime TIMESTAMP,
+                end_datetime TIMESTAMP,
+                status VARCHAR(20) DEFAULT 'draft',
+                is_published BOOLEAN DEFAULT false,
+                passing_percentage INTEGER DEFAULT 50,
+                job_role TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 4. Create Questions Table
+        // Indices for tests
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_is_published ON tests(is_published);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_dates ON tests(start_datetime, end_datetime);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_active ON tests(status, start_datetime, end_datetime) WHERE status = 'published';`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_created_at ON tests(created_at);`);
+
+        // 4. Create Test Job Roles Table
+        console.log('Creating test_job_roles table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS test_job_roles (
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                job_role VARCHAR(255) NOT NULL,
+                job_description TEXT,
+                is_default BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(test_id, job_role)
+            );
+        `);
+
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_job_roles_test_id ON test_job_roles(test_id);`);
+
+        // 5. Create Questions Table
         console.log('Creating questions table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS questions (
@@ -79,7 +155,43 @@ const createTables = async () => {
         // Create index on test_id for faster lookups
         await client.query(`CREATE INDEX IF NOT EXISTS idx_questions_test_id ON questions(test_id);`);
 
-        // 5. Create Student Responses Table (for tracking student answers)
+        // 6. Create Exams Table
+        console.log('Creating exams table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS exams (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                date DATE DEFAULT CURRENT_DATE,
+                duration INTEGER DEFAULT 60,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Indices for exams
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_exams_date ON exams(date);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_exams_created_at ON exams(created_at);`);
+
+        // 7. Create Results Table
+        console.log('Creating results table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS results (
+                id SERIAL PRIMARY KEY,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+                marks_obtained NUMERIC(10, 2) NOT NULL,
+                total_marks NUMERIC(10, 2) NOT NULL,
+                status VARCHAR(20),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Indices for results
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_results_student_id ON results(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_results_exam_id ON results(exam_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_results_student_exam ON results(student_id, exam_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at);`);
+
+        // 8. Create Student Responses Table (for tracking student answers)
         console.log('Creating student_responses table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS student_responses (
@@ -95,7 +207,13 @@ const createTables = async () => {
             );
         `);
 
-        // 6. Create Test Attempts Table (to track overall test submissions)
+        // Indices for student_responses
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_responses_student ON student_responses(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_responses_test ON student_responses(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_responses_question ON student_responses(question_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_responses_student_test ON student_responses(student_id, test_id);`);
+
+        // 9. Create Test Attempts Table (to track overall test submissions)
         console.log('Creating test_attempts table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS test_attempts (
@@ -111,7 +229,14 @@ const createTables = async () => {
             );
         `);
 
-        // 7. Create Test Assignments Table (for assigning tests to students)
+        // Indices for test_attempts
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_attempts_student ON test_attempts(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_attempts_test ON test_attempts(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_attempts_student_test ON test_attempts(student_id, test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_attempts_submitted_at ON test_attempts(submitted_at);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_attempts_test_date ON test_attempts(test_id, submitted_at);`);
+
+        // 10. Create Test Assignments Table (for assigning tests to students)
         console.log('Creating test_assignments table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS test_assignments (
@@ -127,35 +252,75 @@ const createTables = async () => {
         // Create indices for test_assignments
         await client.query(`CREATE INDEX IF NOT EXISTS idx_test_assignments_student ON test_assignments(student_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_test_assignments_test ON test_assignments(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_assignments_active ON test_assignments(is_active);`);
 
-        // 8. Create Proctoring Sessions Table
-    console.log('Creating proctoring_sessions table...');
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS proctoring_sessions (
-        id SERIAL PRIMARY KEY,
-        student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
-        test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        ended_at TIMESTAMP,
-        duration_minutes INTEGER,
-        connection_status VARCHAR(50) DEFAULT 'active',
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+        // 11. Create Exam Progress Table (for saving progress)
+        console.log('Creating exam_progress table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS exam_progress (
+                id SERIAL PRIMARY KEY,
+                student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                answers JSONB,
+                time_remaining INTEGER,
+                tab_switch_count INTEGER DEFAULT 0,
+                current_question INTEGER DEFAULT 0,
+                marked_for_review INTEGER[] DEFAULT '{}',
+                visited_questions INTEGER[] DEFAULT '{0}',
+                warning_count INTEGER DEFAULT 0,
+                last_saved TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_id, test_id)
+            );
+        `);
 
-    // Create indices for proctoring_sessions
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_proctoring_student ON proctoring_sessions(student_id);
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_proctoring_test ON proctoring_sessions(test_id);
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_proctoring_status ON proctoring_sessions(connection_status);
-    `);
+        // Indices for exam_progress
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_exam_progress_student_test ON exam_progress(student_id, test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_exam_progress_student ON exam_progress(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_exam_progress_test ON exam_progress(test_id);`);
 
-    // 9. Seed Default Admin
+        // Create trigger function for exam_progress updated_at
+        await client.query(`
+            CREATE OR REPLACE FUNCTION update_exam_progress_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        `);
+
+        // Create trigger for exam_progress
+        await client.query(`DROP TRIGGER IF EXISTS update_exam_progress_timestamp_trigger ON exam_progress;`);
+        await client.query(`
+            CREATE TRIGGER update_exam_progress_timestamp_trigger
+            BEFORE UPDATE ON exam_progress
+            FOR EACH ROW
+            EXECUTE FUNCTION update_exam_progress_timestamp();
+        `);
+
+        // 12. Create Proctoring Sessions Table
+        console.log('Creating proctoring_sessions table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS proctoring_sessions (
+                id SERIAL PRIMARY KEY,
+                student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+                test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP,
+                duration_minutes INTEGER,
+                connection_status VARCHAR(50) DEFAULT 'active',
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Create indices for proctoring_sessions
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_student ON proctoring_sessions(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_test ON proctoring_sessions(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_status ON proctoring_sessions(connection_status);`);
+
+        // 13. Seed Default Admin
         const defaultAdminEmail = 'admin@example.com';
         const defaultAdminPassword = 'admin123';
         const defaultAdminName = 'System Admin';
@@ -176,10 +341,45 @@ const createTables = async () => {
             console.log('ℹ️ Default admin already exists.');
         }
 
+        // 14. Seed Default Institutes
+        console.log('Seeding default institutes...');
+        const defaultInstitutes = [
+            { name: 'not specified', display_name: 'Not Specified' },
+            { name: 'other', display_name: 'Other' }
+        ];
+
+        for (const institute of defaultInstitutes) {
+            await client.query(`
+                INSERT INTO institutes (name, display_name, created_by)
+                VALUES ($1, $2, 'system')
+                ON CONFLICT (name) DO NOTHING
+            `, [institute.name, institute.display_name]);
+        }
+
+        // 15. Run ANALYZE for query planner optimization
+        console.log('Analyzing tables for query optimization...');
+        const tables = [
+            'students', 'admins', 'tests', 'test_job_roles', 'questions', 
+            'exams', 'results', 'student_responses', 'test_attempts', 
+            'test_assignments', 'exam_progress', 'proctoring_sessions', 'institutes'
+        ];
+        
+        for (const table of tables) {
+            await client.query(`ANALYZE ${table};`);
+        }
+
         console.log('✅ Database setup completed successfully!');
+        console.log('📊 Database includes:');
+        console.log('   - Students table with profile fields');
+        console.log('   - Tests table with job roles and scheduling');
+        console.log('   - Questions and exam management');
+        console.log('   - Progress tracking and proctoring');
+        console.log('   - Performance indexes for 300+ concurrent users');
+        console.log('   - Default admin account and institutes');
 
     } catch (err) {
         console.error('❌ Error creating tables:', err);
+        throw err;
     } finally {
         client.release();
         pool.end();

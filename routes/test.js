@@ -192,9 +192,17 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
         const testTitle = testResult.rows[0].title;
         console.log(`[DELETE TEST] Deleting test: ${testTitle}`);
         
+        // Delete institute test assignments first
+        const instituteAssignmentsDeleted = await client.query('DELETE FROM institute_test_assignments WHERE test_id = $1', [id]);
+        console.log(`[DELETE TEST] Deleted ${instituteAssignmentsDeleted.rowCount} institute test assignments`);
+        
         // Delete test assignments (CASCADE will handle this, but being explicit)
         const assignmentsDeleted = await client.query('DELETE FROM test_assignments WHERE test_id = $1', [id]);
         console.log(`[DELETE TEST] Deleted ${assignmentsDeleted.rowCount} test assignments`);
+        
+        // Delete test job roles
+        const jobRolesDeleted = await client.query('DELETE FROM test_job_roles WHERE test_id = $1', [id]);
+        console.log(`[DELETE TEST] Deleted ${jobRolesDeleted.rowCount} test job roles`);
         
         // Find all exams with matching name
         const examsResult = await client.query('SELECT id FROM exams WHERE name = $1', [testTitle]);
@@ -249,19 +257,20 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 
 /**
  * GET /api/tests/institutes
- * Fetch all institutes with their student counts
+ * Fetch all institutes with their student counts (only active institutes)
  */
 router.get('/institutes', verifyAdmin, async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT 
-                LOWER(institute) as institute,
+                LOWER(s.institute) as institute,
                 COUNT(*) as student_count,
-                STRING_AGG(full_name, ', ') as student_names
-            FROM students
-            WHERE institute IS NOT NULL AND institute != ''
-            GROUP BY LOWER(institute)
-            ORDER BY LOWER(institute) ASC
+                STRING_AGG(s.full_name, ', ') as student_names
+            FROM students s
+            INNER JOIN institutes i ON LOWER(s.institute) = i.name
+            WHERE i.is_active = true
+            GROUP BY LOWER(s.institute)
+            ORDER BY LOWER(s.institute) ASC
         `);
 
         res.json({

@@ -3,6 +3,7 @@ const router = express.Router();
 const { pool, cachedQuery, clearCache } = require('../config/db');
 // const { cache } = require('../config/redis'); // DISABLED: Redis
 // const { cacheMiddleware } = require('../middleware/cache'); // DISABLED: Redis
+const verifyAdmin = require('../middleware/verifyAdmin');
 const verifyToken = require('../middleware/verifyToken');
 
 /**
@@ -685,6 +686,210 @@ router.get('/my-results', verifyToken, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch results'
+        });
+    }
+});
+
+/**
+ * POST /api/student/create
+ * Create a new student manually (admin only)
+ * Automatically assigns all tests that are assigned to the student's institute
+ */
+router.post('/create', verifyAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { full_name, email, roll_number, institute } = req.body;
+
+        // Validate required fields
+        if (!full_name || !email || !institute) {
+            return res.status(400).json({
+                success: false,
+                message: 'Full name, email, and institute are required'
+            });
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please enter a valid email address'
+            });
+        }
+
+        await client.query('BEGIN');
+
+        // Check if student with same email already exists
+        const existingStudent = await client.query(
+            'SELECT id FROM students WHERE email = $1',
+            [email]
+        );
+
+        if (existingStudent.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                success: false,
+                message: 'Student with this email already exists'
+            });
+        }
+
+        const normalizedInstitute = institute.trim().toLowerCase();
+        const displayInstitute = institute.trim();
+
+        // Insert new student (without firebase_uid - manual creation)
+        const result = await client.query(
+            `INSERT INTO students (full_name, email, roll_number, institute, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, NOW(), NOW())
+             RETURNING id, full_name, email, roll_number, institute, created_at`,
+            [full_name, email, roll_number || null, normalizedInstitute]
+        );
+
+        const newStudent = result.rows[0];
+
+        // Auto-assign tests that are assigned to this institute
+        let assignedTestsCount = 0;
+
+        // Method 1: Get tests assigned at institute level
+        const instituteRecord = await client.query(
+            'SELECT id FROM institutes WHERE name = $1 AND is_active = true',
+            [normalizedInstitute]
+        );
+
+        let testsToAssign = [];
+
+        if (instituteRecord.rows.length > 0) {
+            const instituteId = instituteRecord.rows[0].id;
+            const instituteTests = await client.query(
+                `SELECT test_id
+                 FROM institute_test_assignments
+                 WHERE institute_id = $1 AND is_active = true`,
+                [instituteId]
+            );
+            testsToAssign = instituteTests.rows.map(row => row.test_id);
+        }
+
+        // Method 2: Fallback - get tests assigned to other students from the same institute
+        if (testsToAssign.length === 0) {
+            const instituteTests = await client.query(
+                `SELECT DISTINCT ta.test_id
+                 FROM test_assignments ta
+                 JOIN students s ON ta.student_id = s.id
+                 WHERE LOWER(s.institute) = $1 AND ta.is_active = true`,
+                [normalizedInstitute]
+            );
+            testsToAssign = instituteTests.rows.map(row => row.test_id);
+        }
+
+        // Create test_assignments table if it doesn't exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS test_assignments (
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
+                student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true,
+                UNIQUE(test_id, student_id)
+            )
+        `);
+
+        // Assign tests to the new student
+        if (testsToAssign.length > 0) {
+            for (const testId of testsToAssign) {
+                await client.query(
+                    `INSERT INTO test_assignments (test_id, student_id, is_active)
+                     VALUES ($1, $2, true)
+                     ON CONFLICT (test_id, student_id) DO NOTHING`,
+                    [testId, newStudent.id]
+                );
+            }
+            assignedTestsCount = testsToAssign.length;
+        }
+
+        await client.query('COMMIT');
+
+        res.status(201).json({
+            success: true,
+            message: assignedTestsCount > 0 
+                ? `Student created successfully and assigned ${assignedTestsCount} test(s) from institute`
+                : 'Student created successfully',
+            student: newStudent,
+            assigned_tests_count: assignedTestsCount
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error creating student:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create student',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * DELETE /api/student/:id
+ * Delete a single student (admin only)
+ */
+router.delete('/:id', verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Delete student and all associated test assignments
+        const result = await pool.query(
+            'DELETE FROM students WHERE id = $1 RETURNING *',
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Student deleted successfully'
+        });
+
+    } catch (error) {
+        console.error('Error deleting student:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete student',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /api/student/institute/:instituteName/all
+ * Delete all students from a specific institute (admin only)
+ */
+router.delete('/institute/:instituteName/all', verifyAdmin, async (req, res) => {
+    try {
+        const { instituteName } = req.params;
+
+        const result = await pool.query(
+            'DELETE FROM students WHERE LOWER(institute) = LOWER($1) RETURNING *',
+            [instituteName]
+        );
+
+        res.json({
+            success: true,
+            message: `Successfully deleted ${result.rowCount} student(s) from ${instituteName}`,
+            deleted_count: result.rowCount
+        });
+
+    } catch (error) {
+        console.error('Error deleting students:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete students',
+            error: error.message
         });
     }
 });

@@ -19,6 +19,7 @@ const studentRoutes = require('./routes/student');
 const exportRoutes = require('./routes/export');
 const testRoutes = require('./routes/test');
 const healthRoutes = require('./routes/health');
+const institutesRoutes = require('./routes/institutes');
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
@@ -85,6 +86,8 @@ app.use('/api/student/submit-exam', submissionLimiter); // Submission endpoints
 app.use('/api/student/save-progress', submissionLimiter); // Progress save endpoints
 app.use('/api', apiLimiter); // General API endpoints
 
+
+
 // API Routes
 app.use('/api', authRoutes);
 app.use('/api/admin', adminAuthRoutes);
@@ -92,7 +95,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/tests', testRoutes);
-
+app.use('/api/institutes', institutesRoutes);
 // Health monitoring routes
 app.use('/', healthRoutes);
 
