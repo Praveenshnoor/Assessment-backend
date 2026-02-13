@@ -38,16 +38,6 @@ const allowedSocketOrigins = [
     'https://assessments.shnoor.com'
 ].filter(Boolean);
 
-// Socket.IO CORS configuration - Allow multiple origins
-const allowedSocketOrigins = [
-    process.env.FRONTEND_URL,
-    process.env.CLIENT_URL,
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'https://assessment-shnoor-com.onrender.com',
-    'https://assessments.shnoor.com'
-].filter(Boolean);
-
 const io = new Server(server, {
     cors: {
         origin: allowedSocketOrigins,
