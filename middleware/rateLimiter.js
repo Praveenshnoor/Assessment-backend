@@ -1,10 +1,10 @@
 const rateLimit = require('express-rate-limit');
 
 // API rate limiter - Per IP address
-// For production: Consider if students share IPs (school/office networks)
+// For production: Supports up to 200 students from same IP
 const apiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: process.env.NODE_ENV === 'production' ? 10000 : 5000, // Much higher for shared IPs
+  max: process.env.NODE_ENV === 'production' ? 20000 : 5000, // 200 students × 100 requests
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again later.',
@@ -14,11 +14,11 @@ const apiLimiter = rateLimit({
   skip: (req) => req.path.startsWith('/health') || req.path.startsWith('/metrics'),
 });
 
-// Authentication rate limiter - 300 requests per hour per IP
-// Increased for shared IPs in schools/offices
+// Authentication rate limiter - Per IP address
+// Supports up to 200 students from same network
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 300, // Allows multiple students from same IP to login
+  max: 500, // 200 students × 2-3 auth requests each
   message: {
     success: false,
     message: 'Too many authentication attempts, please try again after some time.',
@@ -29,10 +29,10 @@ const authLimiter = rateLimit({
 });
 
 // Test submission rate limiter - Per IP address
-// Increased for multiple students from same network
+// Supports up to 200 students from same network
 const submissionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5000, // Allows many students from same IP to save progress
+  max: 10000, // 200 students × 50 progress saves each
   message: {
     success: false,
     message: 'Too many requests, please try again later.',
@@ -41,12 +41,11 @@ const submissionLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Proctoring frame rate limiter - 5 frames per second per IP
-// Increased to handle multiple students from same network
-// Each student sends ~5 frames/sec, so this allows 1 student per IP per second
+// Proctoring frame rate limiter - Per IP per second
+// Supports up to 200 students at 5 fps from same network
 const proctoringLimiter = rateLimit({
   windowMs: 1000, // 1 second
-  max: 500, // Allows 100 students at 5 fps from same IP
+  max: 1000, // 200 students × 5 frames/sec
   message: {
     success: false,
     message: 'Frame rate exceeded, please reduce proctoring frame rate.',
