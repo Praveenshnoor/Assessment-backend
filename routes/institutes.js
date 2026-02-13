@@ -11,7 +11,23 @@ router.get('/', verifyAdmin, async (req, res) => {
     try {
         console.log('=== GET /api/institutes called ===');
         
-        // First create the institute_test_assignments table if it doesn't exist
+        // First, ensure the institutes table exists
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS institutes (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255) NOT NULL,
+                created_by VARCHAR(255) DEFAULT 'admin',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true
+            );
+        `);
+        
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_institutes_name ON institutes(LOWER(name));`);
+        
+        console.log('Institutes table ensured');
+
+        // Create the institute_test_assignments table if it doesn't exist
         await pool.query(`
             CREATE TABLE IF NOT EXISTS institute_test_assignments (
                 id SERIAL PRIMARY KEY,
@@ -25,38 +41,55 @@ router.get('/', verifyAdmin, async (req, res) => {
         
         console.log('institute_test_assignments table ensured');
 
-        // Auto-create missing institute records for existing students
-        // Handle both 'institute' and 'college_name' fields for legacy data
-        await pool.query(`
-            INSERT INTO institutes (name, display_name, created_by)
-            SELECT DISTINCT 
-                LOWER(TRIM(institute_value)) as name,
-                TRIM(institute_value) as display_name,
-                'auto_migration' as created_by
-            FROM (
-                SELECT COALESCE(NULLIF(TRIM(s.institute), ''), NULLIF(TRIM(s.college_name), ''), 'Not Specified') as institute_value
-                FROM students s
-                WHERE (s.institute IS NOT NULL AND TRIM(s.institute) != '') 
-                   OR (s.college_name IS NOT NULL AND TRIM(s.college_name) != '')
-            ) AS combined_institutes
-            WHERE NOT EXISTS (
-                SELECT 1 FROM institutes i 
-                WHERE i.name = LOWER(TRIM(institute_value))
-            )
-        `);
+        // Check if we have any institutes, if not, create from existing student data
+        const existingInstitutes = await pool.query('SELECT COUNT(*) as count FROM institutes');
+        console.log('Existing institutes count:', existingInstitutes.rows[0].count);
 
-        console.log('Missing institutes auto-created from both institute and college_name fields');
+        if (existingInstitutes.rows[0].count === '0') {
+            console.log('No institutes found, migrating from student data...');
+            
+            // Auto-create missing institute records for existing students
+            await pool.query(`
+                INSERT INTO institutes (name, display_name, created_by)
+                SELECT DISTINCT 
+                    LOWER(TRIM(institute_value)) as name,
+                    TRIM(institute_value) as display_name,
+                    'auto_migration' as created_by
+                FROM (
+                    SELECT COALESCE(NULLIF(TRIM(s.institute), ''), NULLIF(TRIM(s.college_name), ''), 'Not Specified') as institute_value
+                    FROM students s
+                    WHERE (s.institute IS NOT NULL AND TRIM(s.institute) != '') 
+                       OR (s.college_name IS NOT NULL AND TRIM(s.college_name) != '')
+                ) AS combined_institutes
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM institutes i 
+                    WHERE i.name = LOWER(TRIM(institute_value))
+                )
+                ON CONFLICT (name) DO NOTHING
+            `);
 
-        // Migrate college_name data to institute field for students who have college_name but no institute
+            // Add default institutes
+            await pool.query(`
+                INSERT INTO institutes (name, display_name, created_by)
+                VALUES 
+                    ('not specified', 'Not Specified', 'system'),
+                    ('other', 'Other', 'system')
+                ON CONFLICT (name) DO NOTHING
+            `);
+
+            console.log('Migration completed');
+        }
+
+        // Update students with missing institute data
         await pool.query(`
             UPDATE students 
             SET institute = COALESCE(NULLIF(TRIM(institute), ''), NULLIF(TRIM(college_name), ''), 'not specified')
             WHERE institute IS NULL OR TRIM(institute) = ''
         `);
 
-        console.log('College data migrated to institute field');
+        console.log('Student institute data updated');
 
-        // Get all institutes (including auto-created ones) with student counts
+        // Get all institutes with student counts
         const result = await pool.query(`
             SELECT 
                 i.id,
@@ -88,7 +121,6 @@ router.get('/', verifyAdmin, async (req, res) => {
 
         console.log('Query executed successfully');
         console.log('Institutes found:', result.rows.length);
-        console.log('Institutes data:', JSON.stringify(result.rows, null, 2));
 
         res.json({
             success: true,
@@ -97,10 +129,24 @@ router.get('/', verifyAdmin, async (req, res) => {
     } catch (error) {
         console.error('Error fetching institutes:', error);
         console.error('Error stack:', error.stack);
+        console.error('Error code:', error.code);
+        console.error('Error detail:', error.detail);
+        
+        // Provide more specific error information
+        let errorMessage = 'Failed to fetch institutes';
+        if (error.code === '42P01') {
+            errorMessage = 'Database table missing - please run database setup';
+        } else if (error.code === '28P01') {
+            errorMessage = 'Database authentication failed';
+        } else if (error.code === 'ECONNREFUSED') {
+            errorMessage = 'Database connection refused';
+        }
+        
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch institutes',
-            error: error.message
+            message: errorMessage,
+            error: error.message,
+            code: error.code
         });
     }
 });
