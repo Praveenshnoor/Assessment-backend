@@ -89,6 +89,10 @@ app.use(cors({
     },
     credentials: true,
 }));
+
+// Handle OPTIONS requests explicitly (CORS preflight)
+app.options('*', cors());
+
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(expressLogger); // Structured logging with Pino
