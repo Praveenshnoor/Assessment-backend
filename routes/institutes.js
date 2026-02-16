@@ -4,6 +4,50 @@ const { pool } = require('../config/db');
 const verifyAdmin = require('../middleware/verifyAdmin');
 
 /**
+ * GET /api/institutes/public
+ * Fetch active institutes for student registration (public endpoint)
+ */
+router.get('/public', async (req, res) => {
+    try {
+        console.log('=== GET /api/institutes/public called ===');
+        
+        // Ensure the institutes table exists
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS institutes (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255) NOT NULL,
+                created_by VARCHAR(255) DEFAULT 'admin',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true
+            );
+        `);
+
+        // Get all active institutes
+        const result = await pool.query(`
+            SELECT id, display_name, name
+            FROM institutes
+            WHERE is_active = true
+            ORDER BY display_name ASC
+        `);
+
+        console.log('Active institutes found:', result.rows.length);
+
+        res.json({
+            success: true,
+            institutes: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching public institutes:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch institutes',
+            error: error.message
+        });
+    }
+});
+
+/**
  * GET /api/institutes
  * Fetch all institutes (admin only)
  */
@@ -588,6 +632,200 @@ router.delete('/:id/unassign-test/:testId', verifyAdmin, async (req, res) => {
         });
     } finally {
         client.release();
+    }
+});
+
+/**
+ * GET /api/institutes/:instituteName/students-with-details
+ * Get all students from a specific institute with full details including resume links (admin only)
+ */
+router.get('/:instituteName/students-with-details', verifyAdmin, async (req, res) => {
+    try {
+        const { instituteName } = req.params;
+        
+        const result = await pool.query(`
+            SELECT 
+                s.id,
+                s.full_name,
+                s.email,
+                s.roll_number,
+                s.institute,
+                s.phone,
+                s.address,
+                s.course,
+                s.specialization,
+                s.resume_link,
+                s.created_at,
+                COUNT(DISTINCT ta.test_id) as assigned_tests_count,
+                COUNT(DISTINCT tar.id) as completed_tests_count
+            FROM students s
+            LEFT JOIN test_assignments ta ON s.id = ta.student_id
+            LEFT JOIN test_attempts tar ON s.id = tar.student_id
+            WHERE LOWER(s.institute) = LOWER($1)
+            GROUP BY s.id, s.full_name, s.email, s.roll_number, s.institute, 
+                     s.phone, s.address, s.course, s.specialization, s.resume_link, s.created_at
+            ORDER BY s.full_name ASC
+        `, [instituteName]);
+
+        res.json({
+            success: true,
+            institute: instituteName,
+            students: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching students with details:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch students',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * PUT /api/institutes/students/:studentId
+ * Update student information including resume link (admin only)
+ */
+router.put('/students/:studentId', verifyAdmin, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const { full_name, email, phone, address, course, specialization, resume_link } = req.body;
+
+        // Validate required fields
+        if (!full_name || !email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Full name and email are required'
+            });
+        }
+
+        // Update student information
+        const result = await pool.query(`
+            UPDATE students 
+            SET 
+                full_name = $1,
+                email = $2,
+                phone = $3,
+                address = $4,
+                course = $5,
+                specialization = $6,
+                resume_link = $7,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $8
+            RETURNING id, full_name, email, roll_number, institute, phone, address, course, specialization, resume_link, created_at, updated_at
+        `, [full_name, email, phone || null, address || null, course || null, specialization || null, resume_link || null, studentId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Student information updated successfully',
+            student: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Error updating student:', error);
+        
+        // Handle unique constraint violations
+        if (error.code === '23505') {
+            return res.status(409).json({
+                success: false,
+                message: 'Email already exists'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update student information',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /api/institutes/students/:studentId
+ * Delete a student (admin only)
+ * This will cascade delete all related records (test assignments, attempts, etc.)
+ */
+router.delete('/students/:studentId', verifyAdmin, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+
+        const result = await pool.query(
+            'DELETE FROM students WHERE id = $1 RETURNING full_name, email',
+            [studentId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Student ${result.rows[0].full_name} deleted successfully`
+        });
+    } catch (error) {
+        console.error('Error deleting student:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete student',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/institutes/students/:studentId/resume
+ * Get student resume link (admin only)
+ */
+router.get('/students/:studentId/resume', verifyAdmin, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+
+        const result = await pool.query(
+            'SELECT id, full_name, email, resume_link FROM students WHERE id = $1',
+            [studentId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        const student = result.rows[0];
+
+        if (!student.resume_link) {
+            return res.status(404).json({
+                success: false,
+                message: 'Resume link not available for this student'
+            });
+        }
+
+        res.json({
+            success: true,
+            student: {
+                id: student.id,
+                full_name: student.full_name,
+                email: student.email,
+                resume_link: student.resume_link
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching student resume:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch student resume',
+            error: error.message
+        });
     }
 });
 
