@@ -75,6 +75,104 @@ router.get('/', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * GET /api/tests/:id
+ * Fetch a specific test with all its details and questions
+ */
+router.get('/:id', verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Fetch test details
+        const testResult = await pool.query(`
+            SELECT 
+                t.id,
+                t.title,
+                t.description,
+                t.job_role,
+                t.created_at,
+                t.status,
+                t.duration,
+                t.max_attempts,
+                t.passing_percentage,
+                t.start_datetime,
+                t.end_datetime
+            FROM tests t
+            WHERE t.id = $1
+        `, [id]);
+
+        if (testResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        const test = testResult.rows[0];
+
+        // Fetch questions for this test
+        const questionsResult = await pool.query(`
+            SELECT 
+                id,
+                question_text,
+                option_a,
+                option_b,
+                option_c,
+                option_d,
+                correct_option,
+                marks
+            FROM questions
+            WHERE test_id = $1
+            ORDER BY id ASC
+        `, [id]);
+
+        // Fetch job roles for this test
+        let jobRoles = [];
+        try {
+            const jobRolesResult = await pool.query(`
+                SELECT 
+                    job_role,
+                    job_description,
+                    is_default
+                FROM test_job_roles
+                WHERE test_id = $1
+                ORDER BY is_default DESC, job_role ASC
+            `, [id]);
+            
+            jobRoles = jobRolesResult.rows.map(r => ({
+                job_role: r.job_role,
+                job_description: r.job_description,
+                is_default: r.is_default
+            }));
+        } catch (error) {
+            // Table might not exist, use default from test
+            if (test.job_role) {
+                jobRoles = [{
+                    job_role: test.job_role,
+                    job_description: test.description || '',
+                    is_default: true
+                }];
+            }
+        }
+
+        res.json({
+            success: true,
+            test: {
+                ...test,
+                questions: questionsResult.rows,
+                jobRoles: jobRoles
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching test details:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch test details',
+            error: error.message
+        });
+    }
+});
+
+/**
  * PUT /api/tests/:id/status
  * Update test status (draft/published/archived)
  */
@@ -165,6 +263,141 @@ router.put('/:id/job-details', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * PUT /api/tests/:id
+ * Update test details, questions, and job roles (only for draft tests)
+ */
+router.put('/:id', verifyAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { id } = req.params;
+        const { 
+            testName, 
+            jobRoles, 
+            duration, 
+            maxAttempts, 
+            passingPercentage, 
+            startDateTime, 
+            endDateTime,
+            questions 
+        } = req.body;
+
+        console.log('=== UPDATE TEST REQUEST ===');
+        console.log('Test ID:', id);
+        console.log('Test Name:', testName);
+        console.log('Questions count:', questions?.length);
+
+        await client.query('BEGIN');
+
+        // Check if test exists and is draft
+        const testCheck = await client.query(
+            'SELECT id, status FROM tests WHERE id = $1',
+            [id]
+        );
+
+        if (testCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        if (testCheck.rows[0].status !== 'draft') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'Only draft tests can be edited'
+            });
+        }
+
+        // Update test details
+        const defaultJobRole = jobRoles && jobRoles.length > 0 ? jobRoles[0].job_role : '';
+        const defaultJobDescription = jobRoles && jobRoles.length > 0 ? jobRoles[0].job_description : '';
+        
+        await client.query(`
+            UPDATE tests 
+            SET title = $1, 
+                job_role = $2, 
+                description = $3, 
+                duration = $4, 
+                max_attempts = $5, 
+                passing_percentage = $6, 
+                start_datetime = $7, 
+                end_datetime = $8
+            WHERE id = $9
+        `, [
+            testName,
+            defaultJobRole,
+            defaultJobDescription,
+            parseInt(duration) || 60,
+            parseInt(maxAttempts) || 1,
+            parseInt(passingPercentage) || 50,
+            startDateTime || null,
+            endDateTime || null,
+            id
+        ]);
+
+        // Update job roles
+        if (jobRoles && jobRoles.length > 0) {
+            // Delete existing job roles
+            await client.query('DELETE FROM test_job_roles WHERE test_id = $1', [id]);
+
+            // Insert new job roles
+            for (let i = 0; i < jobRoles.length; i++) {
+                const role = jobRoles[i];
+                await client.query(`
+                    INSERT INTO test_job_roles (test_id, job_role, job_description, is_default)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (test_id, job_role) DO NOTHING
+                `, [id, role.job_role, role.job_description || '', i === 0]);
+            }
+        }
+
+        // Update questions if provided
+        if (questions && questions.length > 0) {
+            // Delete existing questions
+            await client.query('DELETE FROM questions WHERE test_id = $1', [id]);
+
+            // Insert new questions
+            for (const q of questions) {
+                await client.query(`
+                    INSERT INTO questions 
+                    (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, marks) 
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                `, [
+                    id,
+                    q.question_text || q.text,
+                    q.option_a || q.options?.[0],
+                    q.option_b || q.options?.[1],
+                    q.option_c || q.options?.[2] || '',
+                    q.option_d || q.options?.[3] || '',
+                    q.correct_option || String.fromCharCode(65 + (q.correctOption || 0)),
+                    q.marks || 1
+                ]);
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Test updated successfully',
+            testId: id
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating test:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update test',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+/**
  * DELETE /api/tests/:id
  * Delete a test and all related data (questions, exams, results, progress, assignments)
  */
@@ -248,6 +481,131 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to delete test',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * POST /api/tests/:id/clone
+ * Clone a test with all its questions
+ * Creates a new test with the same settings and questions but no results or assignments
+ */
+router.post('/:id/clone', verifyAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { id } = req.params;
+        const { new_title } = req.body;
+
+        if (!new_title || new_title.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'New test title is required'
+            });
+        }
+
+        console.log(`[CLONE TEST] Starting clone for test ID: ${id}`);
+        console.log(`[CLONE TEST] New title: ${new_title}`);
+
+        await client.query('BEGIN');
+
+        // Check if new title already exists
+        const titleCheck = await client.query(
+            'SELECT id FROM tests WHERE LOWER(title) = LOWER($1)',
+            [new_title.trim()]
+        );
+
+        if (titleCheck.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                success: false,
+                message: 'A test with this name already exists'
+            });
+        }
+
+        // Get original test details
+        const originalTest = await client.query(
+            'SELECT * FROM tests WHERE id = $1',
+            [id]
+        );
+
+        if (originalTest.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                message: 'Original test not found'
+            });
+        }
+
+        const test = originalTest.rows[0];
+        console.log(`[CLONE TEST] Original test: ${test.title}`);
+
+        // Create new test with same settings but draft status
+        const newTest = await client.query(`
+            INSERT INTO tests (
+                title, description, duration, max_attempts, 
+                start_datetime, end_datetime, status, passing_percentage
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7)
+            RETURNING *
+        `, [
+            new_title.trim(),
+            test.description,
+            test.duration,
+            test.max_attempts,
+            test.start_datetime,
+            test.end_datetime,
+            test.passing_percentage || 50
+        ]);
+
+        const newTestId = newTest.rows[0].id;
+        console.log(`[CLONE TEST] Created new test with ID: ${newTestId}`);
+
+        // Clone all questions
+        const questions = await client.query(
+            'SELECT * FROM questions WHERE test_id = $1 ORDER BY id',
+            [id]
+        );
+
+        console.log(`[CLONE TEST] Cloning ${questions.rows.length} questions`);
+
+        for (const question of questions.rows) {
+            await client.query(`
+                INSERT INTO questions (
+                    test_id, question_text, option_a, option_b, 
+                    option_c, option_d, correct_option, marks
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            `, [
+                newTestId,
+                question.question_text,
+                question.option_a,
+                question.option_b,
+                question.option_c,
+                question.option_d,
+                question.correct_option,
+                question.marks
+            ]);
+        }
+
+        await client.query('COMMIT');
+        console.log(`[CLONE TEST] Successfully cloned test`);
+
+        res.json({
+            success: true,
+            message: `Test cloned successfully as "${new_title}"`,
+            test: newTest.rows[0],
+            questions_cloned: questions.rows.length
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('[CLONE TEST] Error cloning test:', error);
+        console.error('[CLONE TEST] Error stack:', error.stack);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to clone test',
             error: error.message
         });
     } finally {

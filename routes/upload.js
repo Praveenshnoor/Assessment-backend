@@ -475,4 +475,190 @@ router.post('/manual', verifyAdmin, async (req, res) => {
     }
 });
 
+/**
+ * PUT /api/upload/questions/:testId
+ * Update test questions by uploading a new file (replaces all existing questions)
+ * Only works for draft tests
+ */
+router.put('/questions/:testId', verifyAdmin, upload.single('file'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { testId } = req.params;
+
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        }
+
+        const { testName, jobRoles, testDescription, duration, maxAttempts, passingPercentage, startDateTime, endDateTime } = req.body;
+
+        // Parse jobRoles if it's a string (from FormData)
+        let parsedJobRoles = [];
+        if (jobRoles) {
+            try {
+                parsedJobRoles = typeof jobRoles === 'string' ? JSON.parse(jobRoles) : jobRoles;
+            } catch (e) {
+                parsedJobRoles = [{ job_role: jobRoles, job_description: testDescription || '' }];
+            }
+        }
+
+        console.log('=== BULK UPDATE REQUEST ===');
+        console.log('Test ID:', testId);
+        console.log('Test Name:', testName);
+
+        // Check if test exists and is draft
+        const testCheck = await client.query(
+            'SELECT id, status FROM tests WHERE id = $1',
+            [testId]
+        );
+
+        if (testCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        if (testCheck.rows[0].status !== 'draft') {
+            return res.status(400).json({
+                success: false,
+                message: 'Only draft tests can be edited'
+            });
+        }
+
+        let data = [];
+
+        // Check file type
+        const isCsv = req.file.originalname.toLowerCase().endsWith('.csv') || req.file.mimetype === 'text/csv';
+
+        if (isCsv) {
+            // Parse CSV
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(req.file.buffer);
+
+            await new Promise((resolve, reject) => {
+                bufferStream
+                    .pipe(csv())
+                    .on('data', (row) => data.push(row))
+                    .on('end', resolve)
+                    .on('error', reject);
+            });
+        } else {
+            // Parse Excel
+            try {
+                const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                data = xlsx.utils.sheet_to_json(sheet);
+            } catch (e) {
+                return res.status(400).json({ success: false, message: 'Invalid Excel file format' });
+            }
+        }
+
+        if (data.length === 0) {
+            return res.status(400).json({ success: false, message: 'File is empty' });
+        }
+
+        // Start Transaction
+        await client.query('BEGIN');
+
+        // Update test details
+        const defaultJobRole = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_role : '';
+        const defaultJobDescription = parsedJobRoles.length > 0 ? parsedJobRoles[0].job_description : testDescription || '';
+        
+        await client.query(
+            `UPDATE tests 
+             SET title = $1, job_role = $2, description = $3, duration = $4, max_attempts = $5, 
+                 passing_percentage = $6, start_datetime = $7, end_datetime = $8
+             WHERE id = $9`,
+            [
+                testName,
+                defaultJobRole,
+                defaultJobDescription, 
+                parseInt(duration) || 60,
+                parseInt(maxAttempts) || 1,
+                parseInt(passingPercentage) || 50,
+                startDateTime || null,
+                endDateTime || null,
+                testId
+            ]
+        );
+
+        // Update job roles
+        if (parsedJobRoles.length > 0) {
+            await client.query('DELETE FROM test_job_roles WHERE test_id = $1', [testId]);
+
+            for (let i = 0; i < parsedJobRoles.length; i++) {
+                const role = parsedJobRoles[i];
+                await client.query(`
+                    INSERT INTO test_job_roles (test_id, job_role, job_description, is_default)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (test_id, job_role) DO NOTHING
+                `, [testId, role.job_role, role.job_description || '', i === 0]);
+            }
+        }
+
+        // Delete all existing questions
+        await client.query('DELETE FROM questions WHERE test_id = $1', [testId]);
+
+        // Insert new questions from file
+        let insertedCount = 0;
+        for (const row of data) {
+            const getVal = (key) => {
+                const normalizedKey = key.toLowerCase().replace(/\s+/g, '');
+                for (const k of Object.keys(row)) {
+                    if (k.toLowerCase().replace(/\s+/g, '') === normalizedKey) return row[k];
+                }
+                return undefined;
+            };
+
+            const questionText = getVal('question');
+            const optionA = getVal('optiona');
+            const optionB = getVal('optionb');
+            const optionC = getVal('optionc');
+            const optionD = getVal('optiond');
+            const correctOption = getVal('correctoption');
+            const marks = getVal('marks') || 1;
+
+            if (questionText && optionA && optionB && correctOption) {
+                await client.query(
+                    `INSERT INTO questions 
+                    (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, marks) 
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    [
+                        testId,
+                        questionText,
+                        optionA,
+                        optionB,
+                        optionC || '',
+                        optionD || '',
+                        correctOption.toString().replace(/[^A-D]/gi, '').toUpperCase(),
+                        marks
+                    ]
+                );
+                insertedCount++;
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: `Successfully updated test "${testName}" with ${insertedCount} questions.`,
+            testId: testId,
+            questionsCount: insertedCount
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Bulk Update Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Update failed',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;

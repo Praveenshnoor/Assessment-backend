@@ -50,7 +50,7 @@ router.get('/tests', verifyToken, async (req, res) => {
                  AND e.name LIKE '%' || t.title || '%') as attempts_taken
             FROM tests t
             INNER JOIN test_assignments ta ON t.id = ta.test_id
-            WHERE ta.student_id = $1 AND ta.is_active = true
+            WHERE ta.student_id = $1 AND ta.is_active = true AND t.status = 'published'
             ORDER BY ta.assigned_at DESC
         `, [studentId]);
 
