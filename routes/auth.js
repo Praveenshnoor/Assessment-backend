@@ -14,10 +14,10 @@ router.post('/register', verifyToken, async (req, res) => {
         const { full_name, email, roll_number, institute, phone, address, course, specialization, resume_link } = req.body;
         const firebase_uid = req.firebaseUid;
 
-        if (!full_name || !email || !roll_number || !institute) {
+        if (!full_name || !email || !roll_number || !institute || !resume_link) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: full_name, email, roll_number, institute',
+                message: 'Missing required fields: full_name, email, roll_number, institute, resume_link',
             });
         }
 
@@ -111,7 +111,7 @@ router.post('/register', verifyToken, async (req, res) => {
             `INSERT INTO students (firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization, resume_link) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
              RETURNING id, firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization, resume_link, created_at`,
-            [firebase_uid, full_name, email, roll_number, normalizedInstitute, phone || null, address || null, course || null, specialization || null, resume_link || null]
+            [firebase_uid, full_name, email, roll_number, normalizedInstitute, phone || null, address || null, course || null, specialization || null, resume_link]
         );
 
         const newUser = result.rows[0];
