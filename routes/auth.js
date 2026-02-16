@@ -11,7 +11,7 @@ const verifyToken = require('../middleware/verifyToken');
 router.post('/register', verifyToken, async (req, res) => {
     const client = await pool.connect();
     try {
-        const { full_name, email, roll_number, institute, phone, address, course, specialization } = req.body;
+        const { full_name, email, roll_number, institute, phone, address, course, specialization, resume_link } = req.body;
         const firebase_uid = req.firebaseUid;
 
         if (!full_name || !email || !roll_number || !institute) {
@@ -41,6 +41,9 @@ router.post('/register', verifyToken, async (req, res) => {
         `);
         await client.query(`
             ALTER TABLE students ADD COLUMN IF NOT EXISTS specialization VARCHAR(100);
+        `);
+        await client.query(`
+            ALTER TABLE students ADD COLUMN IF NOT EXISTS resume_link VARCHAR(500);
         `);
 
         // Check if user already exists
@@ -105,10 +108,10 @@ router.post('/register', verifyToken, async (req, res) => {
 
         // Insert new student into database
         const result = await client.query(
-            `INSERT INTO students (firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-             RETURNING id, firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization, created_at`,
-            [firebase_uid, full_name, email, roll_number, normalizedInstitute, phone || null, address || null, course || null, specialization || null]
+            `INSERT INTO students (firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization, resume_link) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+             RETURNING id, firebase_uid, full_name, email, roll_number, institute, phone, address, course, specialization, resume_link, created_at`,
+            [firebase_uid, full_name, email, roll_number, normalizedInstitute, phone || null, address || null, course || null, specialization || null, resume_link || null]
         );
 
         const newUser = result.rows[0];

@@ -198,3 +198,14 @@ ADD COLUMN IF NOT EXISTS passing_percentage INTEGER DEFAULT 50;
 
 -- Add comment
 COMMENT ON COLUMN tests.passing_percentage IS 'Minimum percentage required to pass the test (default: 50)';
+
+
+-- Add resume_link column (nullable to support existing students)
+ALTER TABLE students 
+ADD COLUMN IF NOT EXISTS resume_link VARCHAR(500);
+
+-- Add comment for documentation
+COMMENT ON COLUMN students.resume_link IS 'Public URL to student resume (Google Drive, Dropbox, etc.)';
+
+-- Create index for faster queries (optional, useful if filtering by resume presence)
+CREATE INDEX IF NOT EXISTS idx_students_resume_link ON students(resume_link) WHERE resume_link IS NOT NULL;
