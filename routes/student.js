@@ -30,6 +30,22 @@ router.get('/tests', verifyToken, async (req, res) => {
         const studentId = studentResult.rows[0].id;
         const studentInstitute = studentResult.rows[0].institute;
 
+        // Auto-assign any mock tests that are not yet assigned to this student
+        try {
+            await pool.query(`
+                INSERT INTO test_assignments (test_id, student_id, is_active)
+                SELECT t.id, $1, true
+                FROM tests t
+                WHERE t.is_mock_test = true
+                  AND NOT EXISTS (
+                    SELECT 1 FROM test_assignments ta
+                    WHERE ta.test_id = t.id AND ta.student_id = $1
+                  )
+            `, [studentId]);
+        } catch (autoAssignErr) {
+            console.error('Warning: Could not auto-assign mock tests:', autoAssignErr.message);
+        }
+
         // Fetch tests assigned to this student via test_assignments table
         const assignedTestsResult = await pool.query(`
             SELECT 
@@ -42,6 +58,7 @@ router.get('/tests', verifyToken, async (req, res) => {
                 t.max_attempts,
                 t.start_datetime,
                 t.end_datetime,
+                COALESCE(t.is_mock_test, false) as is_mock_test,
                 (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id) as question_count,
                 ta.assigned_at,
                 (SELECT COUNT(*) FROM results r
@@ -50,8 +67,8 @@ router.get('/tests', verifyToken, async (req, res) => {
                  AND e.name LIKE '%' || t.title || '%') as attempts_taken
             FROM tests t
             INNER JOIN test_assignments ta ON t.id = ta.test_id
-            WHERE ta.student_id = $1 AND ta.is_active = true AND t.status = 'published'
-            ORDER BY ta.assigned_at DESC
+            WHERE ta.student_id = $1 AND ta.is_active = true
+            ORDER BY COALESCE(t.is_mock_test, false) DESC, ta.assigned_at DESC
         `, [studentId]);
 
         // Transform assigned tests data
@@ -108,9 +125,10 @@ router.get('/tests', verifyToken, async (req, res) => {
                 isAvailable: isAvailable,
                 availabilityMessage: availabilityMessage,
                 testStatus: testStatus,
-                subject: 'General',
-                difficulty: 'Medium',
-                color: 'bg-blue-50 border-blue-200',
+                isMockTest: test.is_mock_test === true,
+                subject: test.is_mock_test === true ? 'Practice' : 'General',
+                difficulty: test.is_mock_test === true ? 'Easy-Medium' : 'Medium',
+                color: test.is_mock_test === true ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200',
                 alreadyTaken: attemptsTaken >= maxAttempts,
                 assignedAt: test.assigned_at,
                 isAssigned: true
@@ -815,6 +833,27 @@ router.post('/create', verifyAdmin, async (req, res) => {
                 );
             }
             assignedTestsCount = testsToAssign.length;
+        }
+
+        // Auto-assign ALL mock tests to every new student (regardless of institute)
+        try {
+            const mockTestsResult = await client.query(
+                'SELECT id FROM tests WHERE is_mock_test = true'
+            );
+            for (const mockTest of mockTestsResult.rows) {
+                await client.query(
+                    `INSERT INTO test_assignments (test_id, student_id, is_active)
+                     VALUES ($1, $2, true)
+                     ON CONFLICT (test_id, student_id) DO NOTHING`,
+                    [mockTest.id, newStudent.id]
+                );
+            }
+            if (mockTestsResult.rows.length > 0) {
+                console.log(`${mockTestsResult.rows.length} mock test(s) auto-assigned to new student: ${full_name}`);
+            }
+        } catch (mockErr) {
+            console.error('Warning: Could not auto-assign mock test:', mockErr.message);
+            // Don't fail student creation if mock test assignment fails
         }
 
         await client.query('COMMIT');

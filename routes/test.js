@@ -75,6 +75,50 @@ router.get('/', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * GET /api/tests/institutes
+ * Fetch all institutes with their student counts (only active institutes)
+ */
+router.get('/institutes', verifyAdmin, async (req, res) => {
+    try {
+        // First, ensure institutes table exists
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS institutes (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255) NOT NULL,
+                created_by VARCHAR(255) DEFAULT 'admin',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true
+            )
+        `);
+
+        // Simple query to get institutes from students table
+        const result = await pool.query(`
+            SELECT 
+                LOWER(institute) as institute,
+                COUNT(*) as student_count
+            FROM students
+            WHERE institute IS NOT NULL AND institute != ''
+            GROUP BY LOWER(institute)
+            ORDER BY LOWER(institute) ASC
+        `);
+
+        res.json({
+            success: true,
+            institutes: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching institutes:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch institutes',
+            error: error.message
+        });
+    }
+});
+
+/**
  * GET /api/tests/:id
  * Fetch a specific test with all its details and questions
  */
@@ -610,38 +654,6 @@ router.post('/:id/clone', verifyAdmin, async (req, res) => {
         });
     } finally {
         client.release();
-    }
-});
-
-/**
- * GET /api/tests/institutes
- * Fetch all institutes with their student counts (only active institutes)
- */
-router.get('/institutes', verifyAdmin, async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT 
-                LOWER(s.institute) as institute,
-                COUNT(*) as student_count,
-                STRING_AGG(s.full_name, ', ') as student_names
-            FROM students s
-            INNER JOIN institutes i ON LOWER(s.institute) = i.name
-            WHERE i.is_active = true
-            GROUP BY LOWER(s.institute)
-            ORDER BY LOWER(s.institute) ASC
-        `);
-
-        res.json({
-            success: true,
-            institutes: result.rows
-        });
-    } catch (error) {
-        console.error('Error fetching institutes:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch institutes',
-            error: error.message
-        });
     }
 });
 

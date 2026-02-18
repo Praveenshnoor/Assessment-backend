@@ -184,6 +184,27 @@ router.post('/register', verifyToken, async (req, res) => {
             }
         }
 
+        // Auto-assign ALL mock tests to every new student (regardless of institute)
+        try {
+            const mockTestsResult = await client.query(
+                'SELECT id FROM tests WHERE is_mock_test = true'
+            );
+            for (const mockTest of mockTestsResult.rows) {
+                await client.query(
+                    `INSERT INTO test_assignments (test_id, student_id, is_active)
+                     VALUES ($1, $2, true)
+                     ON CONFLICT (test_id, student_id) DO NOTHING`,
+                    [mockTest.id, newUser.id]
+                );
+            }
+            if (mockTestsResult.rows.length > 0) {
+                console.log(`${mockTestsResult.rows.length} mock test(s) auto-assigned to new student: ${full_name}`);
+            }
+        } catch (mockErr) {
+            console.error('Warning: Could not auto-assign mock test:', mockErr.message);
+            // Don't fail registration if mock test assignment fails
+        }
+
         await client.query('COMMIT');
 
         return res.status(201).json({
@@ -206,6 +227,9 @@ router.post('/register', verifyToken, async (req, res) => {
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Registration error:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error code:', error.code);
+        console.error('Error detail:', error.detail);
 
         // Handle database-specific errors
         if (error.code === '23505') { // Unique violation
@@ -219,6 +243,8 @@ router.post('/register', verifyToken, async (req, res) => {
             success: false,
             message: 'Internal server error during registration',
             error: error.message,
+            errorCode: error.code,
+            errorDetail: error.detail
         });
     } finally {
         client.release();

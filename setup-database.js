@@ -1,23 +1,68 @@
 /**
- * MCQ Exam Portal - Database Setup Script
+ * MCQ Exam Portal - Complete Database Setup Script
  * 
- * This script creates the complete database schema for the MCQ exam portal,
- * including all tables, indexes, and seed data needed for the application.
+ * This script creates the complete database schema for the MCQ exam portal.
+ * Run this script after cloning the repository to set up all required tables,
+ * indexes, triggers, and seed data.
  * 
- * Features included:
- * - Student management with profile fields
- * - Admin authentication system
- * - Test creation with job roles and scheduling
- * - Question management and exam attempts
- * - Progress tracking and auto-save functionality
- * - Live proctoring sessions
- * - Institute management
- * - Performance indexes for 300+ concurrent users
- * - Default admin account and seed data
+ * FEATURES INCLUDED:
+ * ==================
  * 
- * Usage: node setup-database.js
+ * Core Tables:
+ * - students: Student profiles with extended fields (phone, address, college, course, etc.)
+ * - admins: Admin authentication with bcrypt password hashing
+ * - institutes: Institute/university management
+ * - tests: Test templates with scheduling, duration, and passing criteria
+ * - test_job_roles: Multiple job roles per test with descriptions
+ * - questions: MCQ questions with 4 options and correct answers
+ * - exams: Exam instances (legacy support)
+ * - results: Exam results tracking
  * 
- * Make sure to configure your .env file with database credentials before running.
+ * Student Features:
+ * - student_responses: Individual question responses with correctness tracking
+ * - test_attempts: Complete test submission records with scores
+ * - test_assignments: Test-to-student assignment mapping
+ * - exam_progress: Auto-save functionality with progress tracking
+ * 
+ * Proctoring Features:
+ * - proctoring_sessions: Live proctoring session tracking
+ * - proctoring_violations: AI-detected cheating violations
+ * 
+ * Performance Optimizations:
+ * - Comprehensive indexes for all foreign keys
+ * - Composite indexes for common query patterns
+ * - Optimized for 300+ concurrent users
+ * - Query planner optimization with ANALYZE
+ * 
+ * Seed Data:
+ * - Default admin account (admin@example.com / admin123)
+ * - Default institutes (Not Specified, Other)
+ * 
+ * PREREQUISITES:
+ * ==============
+ * 1. PostgreSQL 12+ installed and running
+ * 2. Node.js and npm installed
+ * 3. Required npm packages: pg, bcryptjs, dotenv
+ * 4. .env file configured with database credentials:
+ *    - DB_USER
+ *    - DB_HOST
+ *    - DB_NAME
+ *    - DB_PASSWORD
+ *    - DB_PORT (optional, defaults to 5432)
+ * 
+ * USAGE:
+ * ======
+ * 1. Clone the repository
+ * 2. Navigate to backend directory: cd backend
+ * 3. Install dependencies: npm install
+ * 4. Configure .env file with your database credentials
+ * 5. Run this script: node setup-database.js
+ * 
+ * The script will create all tables, indexes, and seed data automatically.
+ * It's safe to run multiple times (uses IF NOT EXISTS checks).
+ * 
+ * @author MCQ Exam Portal Team
+ * @version 2.0.0
  */
 
 const { Pool } = require('pg');
@@ -68,6 +113,7 @@ const createTables = async () => {
                 college_name VARCHAR(255),
                 course VARCHAR(100),
                 specialization VARCHAR(100),
+                resume_link VARCHAR(500),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -78,6 +124,7 @@ const createTables = async () => {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_students_roll_number ON students(roll_number);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_students_created_at ON students(created_at);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_students_resume_link ON students(resume_link) WHERE resume_link IS NOT NULL;`);
 
         // 2. Create Admins Table
         console.log('Creating admins table...');
@@ -321,7 +368,28 @@ const createTables = async () => {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_test ON proctoring_sessions(test_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_status ON proctoring_sessions(connection_status);`);
 
-        // 13. Seed Default Admin
+        // 13. Create Proctoring Violations Table
+        console.log('Creating proctoring_violations table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS proctoring_violations (
+                id SERIAL PRIMARY KEY,
+                student_id VARCHAR(255) NOT NULL,
+                test_id INTEGER NOT NULL,
+                violation_type VARCHAR(50) NOT NULL,
+                severity VARCHAR(20) NOT NULL,
+                message TEXT,
+                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Create indices for proctoring_violations
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_violations ON proctoring_violations(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_violations ON proctoring_violations(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_violation_timestamp ON proctoring_violations(timestamp);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_severity ON proctoring_violations(severity);`);
+
+        // 14. Seed Default Admin
         const defaultAdminEmail = 'admin@example.com';
         const defaultAdminPassword = 'admin123';
         const defaultAdminName = 'System Admin';
@@ -342,7 +410,7 @@ const createTables = async () => {
             console.log('ℹ️ Default admin already exists.');
         }
 
-        // 14. Seed Default Institutes
+        // 15. Seed Default Institutes
         console.log('Seeding default institutes...');
         const defaultInstitutes = [
             { name: 'not specified', display_name: 'Not Specified' },
@@ -362,7 +430,8 @@ const createTables = async () => {
         const tables = [
             'students', 'admins', 'tests', 'test_job_roles', 'questions', 
             'exams', 'results', 'student_responses', 'test_attempts', 
-            'test_assignments', 'exam_progress', 'proctoring_sessions', 'institutes'
+            'test_assignments', 'exam_progress', 'proctoring_sessions', 
+            'proctoring_violations', 'institutes'
         ];
         
         for (const table of tables) {
@@ -371,12 +440,16 @@ const createTables = async () => {
 
         console.log('✅ Database setup completed successfully!');
         console.log('📊 Database includes:');
-        console.log('   - Students table with profile fields');
-        console.log('   - Tests table with job roles and scheduling');
+        console.log('   - Students table with profile fields (phone, address, college, course, specialization)');
+        console.log('   - Institutes table with default institutes');
+        console.log('   - Tests table with job roles, scheduling, and passing percentage');
+        console.log('   - Test job roles table for multiple job roles per test');
         console.log('   - Questions and exam management');
-        console.log('   - Progress tracking and proctoring');
+        console.log('   - Test assignments for student-test mapping');
+        console.log('   - Progress tracking with auto-save functionality');
+        console.log('   - Proctoring sessions and violations tracking');
         console.log('   - Performance indexes for 300+ concurrent users');
-        console.log('   - Default admin account and institutes');
+        console.log('   - Default admin account (admin@example.com / admin123)');
 
     } catch (err) {
         console.error('❌ Error creating tables:', err);

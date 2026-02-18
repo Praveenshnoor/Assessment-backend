@@ -209,3 +209,29 @@ COMMENT ON COLUMN students.resume_link IS 'Public URL to student resume (Google 
 
 -- Create index for faster queries (optional, useful if filtering by resume presence)
 CREATE INDEX IF NOT EXISTS idx_students_resume_link ON students(resume_link) WHERE resume_link IS NOT NULL;
+
+
+
+
+-- Create proctoring_violations table for AI-detected cheating attempts
+CREATE TABLE IF NOT EXISTS proctoring_violations (
+    id SERIAL PRIMARY KEY,
+    student_id VARCHAR(255) NOT NULL,
+    test_id INTEGER NOT NULL,
+    violation_type VARCHAR(50) NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    message TEXT,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for faster queries
+CREATE INDEX IF NOT EXISTS idx_student_violations ON proctoring_violations(student_id);
+CREATE INDEX IF NOT EXISTS idx_test_violations ON proctoring_violations(test_id);
+CREATE INDEX IF NOT EXISTS idx_violation_timestamp ON proctoring_violations(timestamp);
+CREATE INDEX IF NOT EXISTS idx_severity ON proctoring_violations(severity);
+
+-- Add comments
+COMMENT ON TABLE proctoring_violations IS 'Stores AI-detected cheating violations during exams';
+COMMENT ON COLUMN proctoring_violations.violation_type IS 'Type: multiple_faces, no_face, phone_detected, looking_down';
+COMMENT ON COLUMN proctoring_violations.severity IS 'Severity: high, medium, low';

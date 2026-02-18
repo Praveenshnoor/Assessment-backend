@@ -20,6 +20,7 @@ const exportRoutes = require('./routes/export');
 const testRoutes = require('./routes/test');
 const healthRoutes = require('./routes/health');
 const institutesRoutes = require('./routes/institutes');
+const proctoringRoutes = require('./routes/proctoring');
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
@@ -114,6 +115,7 @@ app.use('/api/student', studentRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/institutes', institutesRoutes);
+app.use('/api/proctoring', proctoringRoutes);
 
 // Health monitoring routes
 app.use('/', healthRoutes);
@@ -381,7 +383,7 @@ io.on('connection', (socket) => {
 
     // Frame-based proctoring - Receive frame from student (ONLY if monitored)
     socket.on('proctoring:frame', (data) => {
-        const { studentId, studentName, testId, testTitle, frame, timestamp } = data;
+        const { studentId, studentName, testId, testTitle, frame, timestamp, aiViolations } = data;
         
         // Only relay frames from monitored students
         if (monitoredStudents.has(studentId)) {
@@ -393,7 +395,42 @@ io.on('connection', (socket) => {
                 testTitle,
                 frame,
                 timestamp,
+                aiViolations // Include AI violation counts
             });
+        }
+    });
+
+    // AI Violation detected - Store and alert admins
+    socket.on('proctoring:ai-violation', async (data) => {
+        const { studentId, testId, violation, timestamp } = data;
+        
+        logger.warn({ 
+            studentId, 
+            testId, 
+            violationType: violation.type,
+            severity: violation.severity 
+        }, 'AI Violation detected');
+
+        try {
+            // Store violation in database
+            await pool.query(
+                `INSERT INTO proctoring_violations 
+                (student_id, test_id, violation_type, severity, message, timestamp) 
+                VALUES ($1, $2, $3, $4, $5, $6)`,
+                [studentId, testId, violation.type, violation.severity, violation.message, new Date(timestamp)]
+            );
+
+            // Notify all admins in real-time
+            io.to('admin-room').emit('ai-violation-alert', {
+                studentId,
+                testId,
+                violation,
+                timestamp
+            });
+
+            logger.info({ studentId, testId }, 'AI violation stored and admins notified');
+        } catch (error) {
+            logger.error({ error, studentId, testId }, 'Error storing AI violation');
         }
     });
 
