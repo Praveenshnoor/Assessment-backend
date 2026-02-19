@@ -21,6 +21,7 @@ const testRoutes = require('./routes/test');
 const healthRoutes = require('./routes/health');
 const institutesRoutes = require('./routes/institutes');
 const proctoringRoutes = require('./routes/proctoring');
+const feedbackRoutes = require('./routes/feedback');
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
@@ -43,20 +44,24 @@ const io = new Server(server, {
     cors: {
         origin: allowedSocketOrigins,
         credentials: true,
+        methods: ["GET", "POST"]
     },
     // Connection timeout and reliability settings
-    pingTimeout: 60000, // 60 seconds - how long to wait for pong response
-    pingInterval: 25000, // 25 seconds - how often to send ping
-    upgradeTimeout: 30000, // 30 seconds - time to wait for upgrade
-    allowUpgrades: true,
-    transports: ['websocket', 'polling'], // Allow fallback to polling
+    pingTimeout: 60000, // 60 seconds
+    pingInterval: 25000, // 25 seconds
+    upgradeTimeout: 10000, // 10 seconds
+    allowUpgrades: false, // Disable upgrades - stick with polling
+    transports: ['polling'], // Polling only
     // Connection limits and cleanup
     maxHttpBufferSize: 1e6, // 1MB max buffer size
-    allowEIO3: true, // Allow Engine.IO v3 clients
-    // Compression settings for better performance
-    compression: true,
-    perMessageDeflate: {
-        threshold: 1024, // Only compress messages > 1KB
+    allowEIO3: true,
+    // Compression settings
+    compression: false,
+    // Additional connection settings
+    connectTimeout: 45000,
+    serveClient: false,
+    allowRequest: (req, callback) => {
+        callback(null, true);
     }
 });
 const PORT = process.env.PORT || 5000;
@@ -116,6 +121,7 @@ app.use('/api/export', exportRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/institutes', institutesRoutes);
 app.use('/api/proctoring', proctoringRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 // Health monitoring routes
 app.use('/', healthRoutes);
@@ -263,7 +269,11 @@ let rotationInterval = setInterval(() => {
 }, PROCTORING_CONFIG.ROTATION_INTERVAL * 60 * 1000);
 
 io.on('connection', (socket) => {
-    logger.debug({ socketId: socket.id }, 'Socket.io client connected');
+    logger.info({ 
+        socketId: socket.id, 
+        transport: socket.conn.transport.name,
+        remoteAddress: socket.conn.remoteAddress 
+    }, 'Socket.io client connected');
 
     // Connection timeout handling
     const connectionTimeout = setTimeout(() => {

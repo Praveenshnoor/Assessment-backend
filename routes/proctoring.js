@@ -76,7 +76,7 @@ router.get('/violations/summary/:testId', verifyAdmin, async (req, res) => {
                 COUNT(*) as count,
                 COUNT(DISTINCT student_id) as affected_students
             FROM proctoring_violations
-            WHERE test_id = $1
+            WHERE test_id = $1 AND violation_type != 'microphone_silent'
             GROUP BY violation_type, severity
             ORDER BY count DESC`,
             [testId]
@@ -106,15 +106,15 @@ router.get('/violations/flagged/:testId', verifyAdmin, async (req, res) => {
                 s.full_name as student_name,
                 s.email as student_email,
                 s.phone as student_phone,
-                COUNT(*) as total_violations,
-                COUNT(CASE WHEN pv.severity = 'high' THEN 1 END) as high_severity_count,
-                COUNT(CASE WHEN pv.severity = 'medium' THEN 1 END) as medium_severity_count,
+                COUNT(CASE WHEN pv.violation_type != 'microphone_silent' THEN 1 END) as total_violations,
+                COUNT(CASE WHEN pv.severity = 'high' AND pv.violation_type != 'microphone_silent' THEN 1 END) as high_severity_count,
+                COUNT(CASE WHEN pv.severity = 'medium' AND pv.violation_type != 'microphone_silent' THEN 1 END) as medium_severity_count,
                 MAX(pv.timestamp) as last_violation
             FROM proctoring_violations pv
             LEFT JOIN students s ON pv.student_id = s.id::text
             WHERE pv.test_id = $1
             GROUP BY pv.student_id, s.full_name, s.email, s.phone
-            HAVING COUNT(CASE WHEN pv.severity = 'high' THEN 1 END) >= 3
+            HAVING COUNT(CASE WHEN pv.severity = 'high' AND pv.violation_type != 'microphone_silent' THEN 1 END) >= 3
             ORDER BY high_severity_count DESC, total_violations DESC`,
             [testId]
         );
@@ -147,7 +147,10 @@ router.get('/violations/by-student/:testId', verifyAdmin, async (req, res) => {
                 COUNT(CASE WHEN pv.violation_type = 'multiple_faces' THEN 1 END) as multiple_faces_count,
                 COUNT(CASE WHEN pv.violation_type = 'phone_detected' THEN 1 END) as phone_detected_count,
                 COUNT(CASE WHEN pv.violation_type = 'looking_down' THEN 1 END) as looking_down_count,
-                COUNT(*) as total_violations,
+                COUNT(CASE WHEN pv.violation_type = 'video_blur' THEN 1 END) as video_blur_count,
+                COUNT(CASE WHEN pv.violation_type = 'loud_noise' THEN 1 END) as loud_noise_count,
+                COUNT(CASE WHEN pv.violation_type = 'voice_detected' THEN 1 END) as voice_detected_count,
+                COUNT(CASE WHEN pv.violation_type != 'microphone_silent' THEN 1 END) as total_violations,
                 MAX(pv.timestamp) as last_violation
             FROM proctoring_violations pv
             LEFT JOIN students s ON pv.student_id = s.id::text

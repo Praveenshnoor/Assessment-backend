@@ -638,6 +638,8 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
             message: 'Exam submitted successfully',
             result: {
                 resultId: resultInsert.rows[0].id,
+                studentId: studentId,
+                testId: testId,
                 marksObtained: marksObtained,
                 totalMarks: totalMarks,
                 percentage: percentage.toFixed(2),

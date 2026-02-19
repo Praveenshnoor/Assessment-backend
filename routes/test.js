@@ -77,6 +77,7 @@ router.get('/', verifyAdmin, async (req, res) => {
 /**
  * GET /api/tests/institutes
  * Fetch all institutes with their student counts (only active institutes)
+ * NOTE: This route MUST come before /:id route to avoid "institutes" being treated as an ID
  */
 router.get('/institutes', verifyAdmin, async (req, res) => {
     try {
@@ -113,6 +114,43 @@ router.get('/institutes', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch institutes',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/tests/institutes/:instituteName/students
+ * Fetch all students from a specific institute
+ * NOTE: This route MUST come before /:id route to avoid conflicts
+ */
+router.get('/institutes/:instituteName/students', verifyAdmin, async (req, res) => {
+    try {
+        const { instituteName } = req.params;
+        
+        const result = await pool.query(`
+            SELECT 
+                id,
+                full_name,
+                email,
+                roll_number,
+                institute,
+                created_at
+            FROM students
+            WHERE LOWER(institute) = LOWER($1)
+            ORDER BY full_name ASC
+        `, [instituteName]);
+
+        res.json({
+            success: true,
+            institute: instituteName,
+            students: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching students:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch students',
             error: error.message
         });
     }
@@ -301,6 +339,114 @@ router.put('/:id/job-details', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to update job details',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * PUT /api/tests/:id/details
+ * Update test metadata (job role, description, dates, duration, etc.)
+ * Works for both draft and published tests - does NOT modify questions
+ */
+router.put('/:id/details', verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { 
+            job_role, 
+            description, 
+            start_datetime, 
+            end_datetime,
+            duration,
+            passing_percentage,
+            max_attempts
+        } = req.body;
+
+        console.log('=== UPDATE TEST DETAILS REQUEST ===');
+        console.log('Test ID:', id);
+        console.log('Job Role:', job_role);
+        console.log('Duration:', duration);
+        console.log('Start DateTime:', start_datetime);
+        console.log('End DateTime:', end_datetime);
+
+        // Validation
+        if (!job_role || job_role.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Job role is required'
+            });
+        }
+
+        if (duration && (duration < 1 || duration > 300)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Duration must be between 1 and 300 minutes'
+            });
+        }
+
+        if (passing_percentage !== undefined && (passing_percentage < 0 || passing_percentage > 100)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Passing percentage must be between 0 and 100'
+            });
+        }
+
+        if (max_attempts && (max_attempts < 1 || max_attempts > 10)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Max attempts must be between 1 and 10'
+            });
+        }
+
+        // Check if test exists
+        const testCheck = await pool.query(
+            'SELECT id, title, status FROM tests WHERE id = $1',
+            [id]
+        );
+
+        if (testCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+
+        // Update test metadata only (no questions modification)
+        const result = await pool.query(`
+            UPDATE tests 
+            SET 
+                job_role = $1, 
+                description = $2, 
+                duration = $3, 
+                max_attempts = $4, 
+                passing_percentage = $5, 
+                start_datetime = $6, 
+                end_datetime = $7
+            WHERE id = $8
+            RETURNING *
+        `, [
+            job_role.trim(),
+            description ? description.trim() : '',
+            parseInt(duration) || 60,
+            parseInt(max_attempts) || 1,
+            parseInt(passing_percentage) || 50,
+            start_datetime || null,
+            end_datetime || null,
+            id
+        ]);
+
+        console.log('✅ Test details updated successfully');
+
+        res.json({
+            success: true,
+            message: 'Test details updated successfully',
+            test: result.rows[0]
+        });
+    } catch (error) {
+        console.error('❌ Error updating test details:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update test details',
             error: error.message
         });
     }
@@ -654,42 +800,6 @@ router.post('/:id/clone', verifyAdmin, async (req, res) => {
         });
     } finally {
         client.release();
-    }
-});
-
-/**
- * GET /api/tests/institutes/:instituteName/students
- * Fetch all students from a specific institute
- */
-router.get('/institutes/:instituteName/students', verifyAdmin, async (req, res) => {
-    try {
-        const { instituteName } = req.params;
-        
-        const result = await pool.query(`
-            SELECT 
-                id,
-                full_name,
-                email,
-                roll_number,
-                institute,
-                created_at
-            FROM students
-            WHERE LOWER(institute) = LOWER($1)
-            ORDER BY full_name ASC
-        `, [instituteName]);
-
-        res.json({
-            success: true,
-            institute: instituteName,
-            students: result.rows
-        });
-    } catch (error) {
-        console.error('Error fetching students:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch students',
-            error: error.message
-        });
     }
 });
 
