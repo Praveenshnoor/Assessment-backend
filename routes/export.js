@@ -162,16 +162,17 @@ router.get('/results', verifyAdmin, async (req, res) => {
 
 router.get('/institutes', verifyAdmin, async (req, res) => {
   try {
-    console.log('=== FETCHING INSTITUTES ===');
+    console.log('=== FETCHING INSTITUTES FOR EXPORT ===');
+    
+    // Get institutes from the institutes table (same as dashboard uses)
+    // This ensures the dropdown shows the same names that are stored
     const result = await pool.query(
-      `SELECT DISTINCT 
-        CASE 
-          WHEN institute IS NULL OR institute = '' THEN 'Not Specified'
-          ELSE institute 
-        END as institute_name 
-      FROM students 
-      ORDER BY institute_name`
+      `SELECT DISTINCT display_name as institute_name
+       FROM institutes
+       WHERE is_active = true
+       ORDER BY display_name`
     );
+    
     const institutes = result.rows.map(row => row.institute_name);
     console.log('Found institutes:', institutes);
     res.json({ success: true, institutes });
@@ -188,15 +189,22 @@ router.get('/students', verifyAdmin, async (req, res) => {
     console.log('Raw institutes param:', institutes);
     console.log('Decoded institutes:', decodeURIComponent(institutes || ''));
 
-    let queryText = `SELECT id, full_name, roll_number, email, 
-      COALESCE(phone, 'N/A') as phone, 
-      COALESCE(address, 'N/A') as address, 
-      COALESCE(institute, 'Not Specified') as institute_name, 
-      COALESCE(course, 'N/A') as course, 
-      COALESCE(specialization, 'N/A') as specialization,
-      COALESCE(resume_link, 'N/A') as resume_link,
-      created_at
-    FROM students`;
+    let queryText = `
+      SELECT 
+        s.id, 
+        s.full_name, 
+        s.roll_number, 
+        s.email, 
+        COALESCE(s.phone, 'N/A') as phone, 
+        COALESCE(s.address, 'N/A') as address, 
+        COALESCE(i.display_name, s.institute, 'Not Specified') as institute_name, 
+        COALESCE(s.course, 'N/A') as course, 
+        COALESCE(s.specialization, 'N/A') as specialization,
+        COALESCE(s.resume_link, 'N/A') as resume_link,
+        s.created_at
+      FROM students s
+      LEFT JOIN institutes i ON LOWER(s.institute) = i.name
+    `;
     const queryParams = [];
 
     if (institutes && institutes !== 'ALL') {
@@ -212,20 +220,20 @@ router.get('/students', verifyAdmin, async (req, res) => {
         console.log('Other institutes:', otherInstitutes);
         
         if (hasNotSpecified && otherInstitutes.length > 0) {
-          // Case-insensitive matching using LOWER()
-          queryText += ` WHERE (LOWER(institute) = ANY($1) OR institute IS NULL OR institute = '')`;
-          queryParams.push(otherInstitutes.map(i => i.toLowerCase()));
+          // Match against display_name from institutes table
+          queryText += ` WHERE (i.display_name = ANY($1) OR s.institute IS NULL OR s.institute = '')`;
+          queryParams.push(otherInstitutes);
         } else if (hasNotSpecified) {
-          queryText += ` WHERE (institute IS NULL OR institute = '')`;
+          queryText += ` WHERE (s.institute IS NULL OR s.institute = '' OR i.display_name = 'Not Specified')`;
         } else {
-          // Case-insensitive matching using LOWER()
-          queryText += ` WHERE LOWER(institute) = ANY($1)`;
-          queryParams.push(instituteList.map(i => i.toLowerCase()));
+          // Match against display_name from institutes table
+          queryText += ` WHERE i.display_name = ANY($1)`;
+          queryParams.push(instituteList);
         }
       }
     }
 
-    queryText += ` ORDER BY institute, full_name`;
+    queryText += ` ORDER BY institute_name, s.full_name`;
     
     console.log('Final query:', queryText);
     console.log('Query params:', queryParams);
