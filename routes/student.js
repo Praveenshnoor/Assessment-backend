@@ -491,13 +491,16 @@ router.post('/save-progress', verifyToken, async (req, res) => {
  * Submit exam answers, calculate results, and store in database
  */
 router.post('/submit-exam', verifyToken, async (req, res) => {
-    const { testId, answers, examId } = req.body;
+    const { testId, answers, examId, submissionReason, warningCount, timeRemaining } = req.body;
     const firebaseUid = req.firebaseUid; // From verifyToken middleware
 
     console.log('=== SUBMIT EXAM REQUEST ===');
     console.log('Firebase UID:', firebaseUid);
     console.log('Test ID:', testId);
     console.log('Exam ID:', examId);
+    console.log('Submission Reason:', submissionReason);
+    console.log('Warning Count:', warningCount);
+    console.log('Time Remaining:', timeRemaining);
     console.log('Answers:', answers);
     console.log('Answers type:', typeof answers);
     console.log('Answers keys:', Object.keys(answers || {}));
@@ -544,26 +547,10 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
         const startDateTime = testDetails.rows[0].start_datetime;
         const endDateTime = testDetails.rows[0].end_datetime;
 
-        // Check if test is within available time window
-        const now = new Date();
-        const startDate = startDateTime ? new Date(startDateTime) : null;
-        const endDate = endDateTime ? new Date(endDateTime) : null;
-        
-        if (startDate && now < startDate) {
-            return res.status(403).json({
-                success: false,
-                message: `This test is not yet available. It will be available from ${startDate.toLocaleString()}`,
-                notYetAvailable: true
-            });
-        }
-        
-        if (endDate && now > endDate) {
-            return res.status(403).json({
-                success: false,
-                message: `This test has expired. It was available until ${endDate.toLocaleString()}`,
-                expired: true
-            });
-        }
+        // REMOVED: Timezone check during submission
+        // If student already started the test, they should be able to submit it
+        // The availability check is done when starting the test, not during submission
+        console.log('Test availability check skipped during submission (already validated at test start)');
 
         // Check how many attempts the student has already made
         const existingAttemptsCheck = await pool.query(`
@@ -666,10 +653,16 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
         `, [studentId, finalExamId, marksObtained, totalMarks, status]);
 
         // 7. Clear saved progress after successful submission
-        await pool.query(`
-            DELETE FROM exam_progress
-            WHERE student_id = $1 AND test_id = $2
-        `, [studentId, testId]);
+        try {
+            await pool.query(`
+                DELETE FROM exam_progress
+                WHERE student_id = $1 AND test_id = $2
+            `, [studentId, testId]);
+            console.log('✅ Cleared exam progress for student:', studentId, 'test:', testId);
+        } catch (progressError) {
+            // Don't fail submission if progress deletion fails
+            console.error('⚠️ Failed to clear exam progress (non-critical):', progressError.message);
+        }
 
         // 8. Return success response
         res.json({
