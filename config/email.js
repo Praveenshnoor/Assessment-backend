@@ -112,7 +112,7 @@ async function sendCredentialsEmail(email, fullName, password, institute) {
                             
                             <p><strong>Important:</strong> Please keep these credentials safe. You can change your password after logging in.</p>
                             
-                            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}" class="button">Login Now</a>
+                            <a href="${process.env.CLIENT_URL || 'http://localhost:5173'}" class="button">Login Now</a>
                             
                             <p style="margin-top: 30px;">If you have any questions or need assistance, please contact your administrator.</p>
                         </div>
