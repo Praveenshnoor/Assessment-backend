@@ -333,6 +333,41 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
             marks: q.marks
         }));
 
+        // Fetch coding questions for this test
+        const codingQuestionsResult = await pool.query(
+            `SELECT id, title, description, time_limit, memory_limit 
+             FROM coding_questions 
+             WHERE test_id = $1 
+             ORDER BY question_order ASC, id ASC`,
+            [testId]
+        );
+
+        console.log(`[Student Test] Found ${codingQuestionsResult.rows.length} coding questions for test ${testId}`);
+
+        // Get public test cases for each coding question
+        const codingQuestions = await Promise.all(
+            codingQuestionsResult.rows.map(async (question) => {
+                const testCasesResult = await pool.query(
+                    `SELECT input, output, explanation 
+                     FROM coding_test_cases 
+                     WHERE coding_question_id = $1 AND is_hidden = false
+                     ORDER BY test_case_order ASC, id ASC`,
+                    [question.id]
+                );
+
+                return {
+                    id: question.id,
+                    title: question.title,
+                    description: question.description,
+                    timeLimit: parseFloat(question.time_limit),
+                    memoryLimit: question.memory_limit,
+                    testCases: testCasesResult.rows
+                };
+            })
+        );
+
+        console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
+
         // 3. Check for saved progress
         const progressResult = await pool.query(`
             SELECT answers, current_question, marked_for_review, visited_questions, time_remaining, warning_count
@@ -365,6 +400,7 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
                 description: test.description,
                 duration: test.duration || 60,
                 questions: questions,
+                codingQuestions: codingQuestions,
                 isAssigned: isAssigned
             },
             savedProgress: savedProgress

@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS tests (
     description TEXT,
     duration INTEGER DEFAULT 60, -- Duration in minutes
     max_attempts INTEGER DEFAULT 1, -- Number of attempts allowed
-    start_datetime TIMESTAMP, -- Exam start date and time
-    end_datetime TIMESTAMP, -- Exam end date and time
+    start_datetime TIMESTAMPTZ, -- Exam start date and time (timezone-aware)
+    end_datetime TIMESTAMPTZ, -- Exam end date and time (timezone-aware)
     status VARCHAR(20) DEFAULT 'draft', -- Test status: draft, published, archived
     is_published BOOLEAN DEFAULT false, -- Legacy field for backward compatibility
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
