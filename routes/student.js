@@ -333,7 +333,9 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
             marks: q.marks
         }));
 
-        // Fetch coding questions for this test
+        // Fetch coding questions for this test (DISABLED FOR NOW)
+        let codingQuestions = [];
+        /*
         const codingQuestionsResult = await pool.query(
             `SELECT id, title, description, time_limit, memory_limit 
              FROM coding_questions 
@@ -367,6 +369,7 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
         );
 
         console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
+        */
 
         // 3. Check for saved progress
         const progressResult = await pool.query(`
