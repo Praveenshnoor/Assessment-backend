@@ -221,6 +221,7 @@ router.post('/register', verifyToken, async (req, res) => {
                 address: newUser.address,
                 course: newUser.course,
                 specialization: newUser.specialization,
+                resume_link: newUser.resume_link,
                 created_at: newUser.created_at,
             },
         });

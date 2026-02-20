@@ -661,4 +661,267 @@ router.put('/questions/:testId', verifyAdmin, upload.single('file'), async (req,
     }
 });
 
+/**
+ * POST /api/upload/students
+ * Bulk upload students from CSV file
+ * CSV columns: fullname, contact, email, institute, password (optional - will be auto-generated)
+ */
+router.post('/students', verifyAdmin, upload.single('file'), async (req, res) => {
+    const client = await pool.connect();
+    const admin = require('../config/firebase');
+    const { sendCredentialsEmail } = require('../config/email');
+
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        }
+
+        console.log('=== BULK STUDENT UPLOAD REQUEST ===');
+        console.log('File:', req.file.originalname);
+
+        let data = [];
+        const isCsv = req.file.originalname.toLowerCase().endsWith('.csv') || req.file.mimetype === 'text/csv';
+
+        // Parse file
+        if (isCsv) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(req.file.buffer);
+
+            await new Promise((resolve, reject) => {
+                bufferStream
+                    .pipe(csv())
+                    .on('data', (row) => data.push(row))
+                    .on('end', resolve)
+                    .on('error', reject);
+            });
+        } else {
+            try {
+                const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                data = xlsx.utils.sheet_to_json(sheet);
+            } catch (e) {
+                return res.status(400).json({ success: false, message: 'Invalid Excel file format' });
+            }
+        }
+
+        if (data.length === 0) {
+            return res.status(400).json({ success: false, message: 'File is empty' });
+        }
+
+        console.log(`Processing ${data.length} students...`);
+
+        // Validate columns
+        const requiredColumns = ['fullname', 'email', 'institute'];
+        const firstRow = data[0];
+        const columns = Object.keys(firstRow).map(k => k.toLowerCase().trim());
+        const missingColumns = requiredColumns.filter(col => {
+            return !columns.some(c => c.includes(col.toLowerCase()));
+        });
+
+        if (missingColumns.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Missing required columns: ${missingColumns.join(', ')}. Required columns are: fullname, email, institute, contact (optional)`
+            });
+        }
+
+        await client.query('BEGIN');
+
+        // Ensure students table has all required columns
+        await client.query(`
+            ALTER TABLE students 
+            ADD COLUMN IF NOT EXISTS institute VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS phone VARCHAR(20),
+            ADD COLUMN IF NOT EXISTS roll_number VARCHAR(100);
+        `);
+
+        // Remove unique constraint from roll_number if it exists
+        await client.query(`
+            ALTER TABLE students DROP CONSTRAINT IF EXISTS students_roll_number_key;
+        `);
+
+        // Make firebase_uid nullable temporarily for bulk upload
+        await client.query(`
+            ALTER TABLE students ALTER COLUMN firebase_uid DROP NOT NULL;
+        `);
+
+        const results = {
+            success: [],
+            errors: [],
+            total: data.length
+        };
+
+        for (let i = 0; i < data.length; i++) {
+            const row = data[i];
+            try {
+                // Normalize column names (handle different case and spacing)
+                const normalizedRow = {};
+                Object.keys(row).forEach(key => {
+                    const normalizedKey = key.toLowerCase().trim();
+                    normalizedRow[normalizedKey] = row[key];
+                });
+
+                // Extract data with flexible column name matching
+                const fullname = normalizedRow.fullname || normalizedRow['full name'] || normalizedRow.name || '';
+                const email = normalizedRow.email || normalizedRow['email address'] || '';
+                const institute = normalizedRow.institute || normalizedRow.university || normalizedRow.college || '';
+                const contact = normalizedRow.contact || normalizedRow.phone || normalizedRow.mobile || '';
+
+                // Validate required fields
+                if (!fullname || !email || !institute) {
+                    results.errors.push({
+                        row: i + 1,
+                        email: email || 'N/A',
+                        error: 'Missing required fields (fullname, email, or institute)'
+                    });
+                    continue;
+                }
+
+                // Validate email format
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(email)) {
+                    results.errors.push({
+                        row: i + 1,
+                        email,
+                        error: 'Invalid email format'
+                    });
+                    continue;
+                }
+
+                // Generate password: firstname@2026
+                const firstName = fullname.trim().split(' ')[0];
+                const password = `${firstName}@2026`;
+
+                // Check if student already exists in database
+                const existingStudent = await client.query(
+                    'SELECT id, firebase_uid, email FROM students WHERE email = $1',
+                    [email]
+                );
+
+                if (existingStudent.rows.length > 0) {
+                    results.errors.push({
+                        row: i + 1,
+                        email,
+                        error: 'Student with this email already exists'
+                    });
+                    continue;
+                }
+
+                // Normalize institute name
+                const normalizedInstitute = institute.trim().toLowerCase();
+                const displayInstitute = institute.trim();
+
+                // Ensure institute exists in institutes table
+                await client.query(
+                    `INSERT INTO institutes (name, display_name, created_by)
+                     VALUES ($1, $2, 'bulk_upload')
+                     ON CONFLICT (name) DO NOTHING`,
+                    [normalizedInstitute, displayInstitute]
+                );
+
+                // Create Firebase user
+                let firebaseUid = null;
+                try {
+                    const firebaseUser = await admin.auth().createUser({
+                        email: email,
+                        password: password,
+                        displayName: fullname,
+                        emailVerified: false
+                    });
+                    firebaseUid = firebaseUser.uid;
+                    console.log(`✅ Firebase user created: ${email}`);
+                } catch (firebaseError) {
+                    if (firebaseError.code === 'auth/email-already-exists') {
+                        // Try to get existing Firebase user
+                        try {
+                            const existingFirebaseUser = await admin.auth().getUserByEmail(email);
+                            firebaseUid = existingFirebaseUser.uid;
+                            console.log(`⚠️  Using existing Firebase user: ${email}`);
+                        } catch (getError) {
+                            results.errors.push({
+                                row: i + 1,
+                                email,
+                                error: `Firebase error: ${firebaseError.message}`
+                            });
+                            continue;
+                        }
+                    } else {
+                        results.errors.push({
+                            row: i + 1,
+                            email,
+                            error: `Firebase error: ${firebaseError.message}`
+                        });
+                        continue;
+                    }
+                }
+
+                // Insert student into database
+                const studentResult = await client.query(
+                    `INSERT INTO students (firebase_uid, full_name, email, institute, phone, roll_number, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                     RETURNING id, full_name, email, institute`,
+                    [firebaseUid, fullname, email, normalizedInstitute, contact || null, email]
+                );
+
+                const student = studentResult.rows[0];
+
+                // Send credentials email (non-blocking)
+                sendCredentialsEmail(email, fullname, password, displayInstitute)
+                    .then(result => {
+                        if (result.success) {
+                            console.log(`✅ Credentials email sent to ${email}`);
+                        } else {
+                            console.warn(`⚠️  Failed to send email to ${email}: ${result.message || result.error}`);
+                        }
+                    })
+                    .catch(err => {
+                        console.error(`❌ Error sending email to ${email}:`, err.message);
+                    });
+
+                results.success.push({
+                    row: i + 1,
+                    email,
+                    fullname,
+                    institute: displayInstitute,
+                    password
+                });
+
+                console.log(`✅ Student created: ${email}`);
+
+            } catch (rowError) {
+                console.error(`Error processing row ${i + 1}:`, rowError);
+                results.errors.push({
+                    row: i + 1,
+                    email: row.email || 'N/A',
+                    error: rowError.message
+                });
+            }
+        }
+
+        await client.query('COMMIT');
+
+        console.log('=== BULK UPLOAD COMPLETE ===');
+        console.log(`Success: ${results.success.length}`);
+        console.log(`Errors: ${results.errors.length}`);
+
+        res.json({
+            success: true,
+            message: `Bulk upload completed. ${results.success.length} students created, ${results.errors.length} errors.`,
+            results: results
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Bulk upload error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to upload students',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
