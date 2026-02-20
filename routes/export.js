@@ -182,14 +182,17 @@ router.get('/institutes', verifyAdmin, async (req, res) => {
 router.get('/students', verifyAdmin, async (req, res) => {
   try {
     const { institutes } = req.query;
-    console.log('Exporting students for institutes:', institutes);
+    console.log('=== STUDENT EXPORT REQUEST ===');
+    console.log('Institutes filter:', institutes);
 
     let queryText = `SELECT id, full_name, roll_number, email, 
       COALESCE(phone, 'N/A') as phone, 
       COALESCE(address, 'N/A') as address, 
       COALESCE(institute, 'Not Specified') as institute_name, 
       COALESCE(course, 'N/A') as course, 
-      COALESCE(specialization, 'N/A') as specialization 
+      COALESCE(specialization, 'N/A') as specialization,
+      COALESCE(resume_link, 'N/A') as resume_link,
+      created_at
     FROM students`;
     const queryParams = [];
 
@@ -201,56 +204,121 @@ router.get('/students', verifyAdmin, async (req, res) => {
         const otherInstitutes = instituteList.filter(c => c !== 'Not Specified');
         
         if (hasNotSpecified && otherInstitutes.length > 0) {
-          queryText += ` WHERE (institute = ANY($1) OR institute IS NULL OR institute = '')`;
-          queryParams.push(otherInstitutes);
+          // Case-insensitive matching using LOWER()
+          queryText += ` WHERE (LOWER(institute) = ANY($1) OR institute IS NULL OR institute = '')`;
+          queryParams.push(otherInstitutes.map(i => i.toLowerCase()));
         } else if (hasNotSpecified) {
           queryText += ` WHERE (institute IS NULL OR institute = '')`;
         } else {
-          queryText += ` WHERE institute = ANY($1)`;
-          queryParams.push(instituteList);
+          // Case-insensitive matching using LOWER()
+          queryText += ` WHERE LOWER(institute) = ANY($1)`;
+          queryParams.push(instituteList.map(i => i.toLowerCase()));
         }
       }
     }
 
     queryText += ` ORDER BY institute, full_name`;
+    
+    console.log('Executing query:', queryText);
+    console.log('Query params:', queryParams);
+    
     const result = await pool.query(queryText, queryParams);
     const students = result.rows;
+
+    console.log(`Found ${students.length} students`);
+
+    // Check if no students found
+    if (students.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No students found for the selected institute(s)' 
+      });
+    }
 
     const ExcelJS = require('exceljs');
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Student Report');
 
+    // Define columns
     worksheet.columns = [
       { header: 'Registration ID', key: 'roll_number', width: 15 },
       { header: 'Name', key: 'full_name', width: 25 },
-      { header: 'Phone', key: 'phone', width: 15 },
       { header: 'Email', key: 'email', width: 30 },
-      { header: 'Address', key: 'address', width: 40 },
+      { header: 'Phone', key: 'phone', width: 15 },
       { header: 'Institute Name', key: 'institute_name', width: 30 },
       { header: 'Course', key: 'course', width: 15 },
       { header: 'Specialization', key: 'specialization', width: 20 },
+      { header: 'Address', key: 'address', width: 40 },
+      { header: 'Resume Link', key: 'resume_link', width: 50 },
+      { header: 'Registration Date', key: 'created_at', width: 20 },
     ];
 
+    // Style header row
     const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FFFFFF00' }
+      fgColor: { argb: 'FF4472C4' }
     };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.height = 20;
 
-    students.forEach(student => {
-      worksheet.addRow(student);
+    // Add data rows
+    students.forEach((student, index) => {
+      const row = worksheet.addRow({
+        roll_number: student.roll_number || 'N/A',
+        full_name: student.full_name || 'N/A',
+        email: student.email || 'N/A',
+        phone: student.phone || 'N/A',
+        institute_name: student.institute_name || 'Not Specified',
+        course: student.course || 'N/A',
+        specialization: student.specialization || 'N/A',
+        address: student.address || 'N/A',
+        resume_link: student.resume_link || 'N/A',
+        created_at: student.created_at ? new Date(student.created_at).toLocaleDateString('en-IN') : 'N/A'
+      });
+
+      // Alternate row colors
+      if (index % 2 === 0) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF3F4F6' }
+        };
+      }
     });
 
+    // Add borders to all cells
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      });
+    });
+
+    console.log('Excel file generated successfully');
+
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().split('T')[0];
+    const filename = `Students_Report_${timestamp}.xlsx`;
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="Students_Report.xlsx"');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
     await workbook.xlsx.write(res);
     res.end();
+    
+    console.log('Excel file sent successfully');
   } catch (error) {
-    console.error('Error exporting students:', error);
-    res.status(500).json({ success: false, message: 'Failed to export students' });
+    console.error('=== STUDENT EXPORT ERROR ===');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ success: false, message: 'Failed to export students', error: error.message });
   }
 });
 
