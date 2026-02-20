@@ -208,7 +208,8 @@ router.get('/students', verifyAdmin, async (req, res) => {
     const queryParams = [];
 
     if (institutes && institutes !== 'ALL') {
-      const instituteList = institutes.split(',').map(c => c.trim());
+      // Split by pipe (|) instead of comma to handle institute names with commas
+      const instituteList = institutes.split('|').map(c => c.trim());
       console.log('Institute list after split:', instituteList);
       
       if (instituteList.length > 0) {
