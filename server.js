@@ -22,7 +22,7 @@ const healthRoutes = require('./routes/health');
 const institutesRoutes = require('./routes/institutes');
 const proctoringRoutes = require('./routes/proctoring');
 const feedbackRoutes = require('./routes/feedback');
-const codingQuestionsRoutes = require('./routes/codingQuestions');
+// const codingQuestionsRoutes = require('./routes/codingQuestions'); // Disabled for now
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
@@ -123,7 +123,7 @@ app.use('/api/tests', testRoutes);
 app.use('/api/institutes', institutesRoutes);
 app.use('/api/proctoring', proctoringRoutes);
 app.use('/api/feedback', feedbackRoutes);
-app.use('/api/coding-questions', codingQuestionsRoutes);
+// app.use('/api/coding-questions', codingQuestionsRoutes); // Disabled for now
 
 // Health monitoring routes
 app.use('/', healthRoutes);
