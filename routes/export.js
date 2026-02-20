@@ -162,6 +162,7 @@ router.get('/results', verifyAdmin, async (req, res) => {
 
 router.get('/institutes', verifyAdmin, async (req, res) => {
   try {
+    console.log('=== FETCHING INSTITUTES ===');
     const result = await pool.query(
       `SELECT DISTINCT 
         CASE 
@@ -172,6 +173,7 @@ router.get('/institutes', verifyAdmin, async (req, res) => {
       ORDER BY institute_name`
     );
     const institutes = result.rows.map(row => row.institute_name);
+    console.log('Found institutes:', institutes);
     res.json({ success: true, institutes });
   } catch (error) {
     console.error('Error fetching institutes:', error);
@@ -183,7 +185,8 @@ router.get('/students', verifyAdmin, async (req, res) => {
   try {
     const { institutes } = req.query;
     console.log('=== STUDENT EXPORT REQUEST ===');
-    console.log('Institutes filter:', institutes);
+    console.log('Raw institutes param:', institutes);
+    console.log('Decoded institutes:', decodeURIComponent(institutes || ''));
 
     let queryText = `SELECT id, full_name, roll_number, email, 
       COALESCE(phone, 'N/A') as phone, 
@@ -198,10 +201,15 @@ router.get('/students', verifyAdmin, async (req, res) => {
 
     if (institutes && institutes !== 'ALL') {
       const instituteList = institutes.split(',').map(c => c.trim());
+      console.log('Institute list after split:', instituteList);
+      
       if (instituteList.length > 0) {
         // Handle "Not Specified" case
         const hasNotSpecified = instituteList.includes('Not Specified');
         const otherInstitutes = instituteList.filter(c => c !== 'Not Specified');
+        
+        console.log('Has Not Specified:', hasNotSpecified);
+        console.log('Other institutes:', otherInstitutes);
         
         if (hasNotSpecified && otherInstitutes.length > 0) {
           // Case-insensitive matching using LOWER()
@@ -219,16 +227,21 @@ router.get('/students', verifyAdmin, async (req, res) => {
 
     queryText += ` ORDER BY institute, full_name`;
     
-    console.log('Executing query:', queryText);
+    console.log('Final query:', queryText);
     console.log('Query params:', queryParams);
     
     const result = await pool.query(queryText, queryParams);
     const students = result.rows;
 
     console.log(`Found ${students.length} students`);
+    
+    if (students.length > 0) {
+      console.log('Sample student institutes:', students.slice(0, 3).map(s => s.institute_name));
+    }
 
     // Check if no students found
     if (students.length === 0) {
+      console.log('No students found - returning 404');
       return res.status(404).json({ 
         success: false, 
         message: 'No students found for the selected institute(s)' 
