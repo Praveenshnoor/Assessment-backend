@@ -34,8 +34,8 @@ const pool = new Pool(poolConfig);
 // Test database connection and set timezone
 pool.on('connect', (client) => {
   console.log('✅ Connected to PostgreSQL database');
-  // Set session timezone to Asia/Kolkata for all connections
-  client.query("SET timezone = 'Asia/Kolkata'");
+  // Set session timezone to UTC for consistent datetime handling
+  client.query("SET timezone = 'UTC'");
   // Set session parameters for better performance
   client.query('SET statement_timeout = 30000'); // 30 second timeout
   client.query('SET idle_in_transaction_session_timeout = 60000'); // 60 second idle timeout
