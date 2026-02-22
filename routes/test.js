@@ -476,7 +476,11 @@ router.put('/:id/details', verifyAdmin, async (req, res) => {
                 start_datetime = $6, 
                 end_datetime = $7
             WHERE id = $8
-            RETURNING *
+            RETURNING 
+                id, title, job_role, description, duration, max_attempts, passing_percentage,
+                start_datetime AT TIME ZONE 'Asia/Kolkata' as start_datetime,
+                end_datetime AT TIME ZONE 'Asia/Kolkata' as end_datetime,
+                status, created_at
         `, [
             job_role.trim(),
             description ? description.trim() : '',
