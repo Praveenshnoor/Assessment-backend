@@ -917,27 +917,54 @@ router.post('/create', verifyAdmin, async (req, res) => {
 /**
  * DELETE /api/student/:id
  * Delete a single student (admin only)
+ * Also deletes the user from Firebase Authentication
  */
 router.delete('/:id', verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Delete student and all associated test assignments
-        const result = await pool.query(
-            'DELETE FROM students WHERE id = $1 RETURNING *',
+        // First, get the student's firebase_uid before deleting
+        const studentResult = await pool.query(
+            'SELECT firebase_uid, full_name, email FROM students WHERE id = $1',
             [id]
         );
 
-        if (result.rows.length === 0) {
+        if (studentResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Student not found'
             });
         }
 
+        const student = studentResult.rows[0];
+        const firebaseUid = student.firebase_uid;
+
+        // Delete from database first
+        await pool.query(
+            'DELETE FROM students WHERE id = $1',
+            [id]
+        );
+
+        // Then delete from Firebase if firebase_uid exists
+        if (firebaseUid) {
+            try {
+                const admin = require('../config/firebase');
+                await admin.auth().deleteUser(firebaseUid);
+                console.log(`✅ Deleted Firebase user: ${firebaseUid}`);
+            } catch (firebaseError) {
+                // Log error but don't fail the request since DB deletion succeeded
+                console.error('⚠️ Failed to delete Firebase user:', firebaseError.message);
+                return res.json({
+                    success: true,
+                    message: 'Student deleted from database, but Firebase deletion failed',
+                    warning: 'Firebase user may still exist'
+                });
+            }
+        }
+
         res.json({
             success: true,
-            message: 'Student deleted successfully'
+            message: 'Student deleted successfully from both database and Firebase'
         });
 
     } catch (error) {
@@ -953,20 +980,60 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 /**
  * DELETE /api/student/institute/:instituteName/all
  * Delete all students from a specific institute (admin only)
+ * Also deletes all users from Firebase Authentication
  */
 router.delete('/institute/:instituteName/all', verifyAdmin, async (req, res) => {
     try {
         const { instituteName } = req.params;
 
-        const result = await pool.query(
+        // First, get all students' firebase_uids before deleting
+        const studentsResult = await pool.query(
+            'SELECT id, firebase_uid, full_name, email FROM students WHERE LOWER(institute) = LOWER($1)',
+            [instituteName]
+        );
+
+        if (studentsResult.rows.length === 0) {
+            return res.json({
+                success: true,
+                message: `No students found in ${instituteName}`,
+                deleted_count: 0
+            });
+        }
+
+        const students = studentsResult.rows;
+        const firebaseUids = students.filter(s => s.firebase_uid).map(s => s.firebase_uid);
+
+        // Delete from database first
+        const deleteResult = await pool.query(
             'DELETE FROM students WHERE LOWER(institute) = LOWER($1) RETURNING *',
             [instituteName]
         );
 
+        // Then delete from Firebase
+        let firebaseDeleteCount = 0;
+        let firebaseErrors = 0;
+
+        if (firebaseUids.length > 0) {
+            const admin = require('../config/firebase');
+            
+            for (const uid of firebaseUids) {
+                try {
+                    await admin.auth().deleteUser(uid);
+                    firebaseDeleteCount++;
+                    console.log(`✅ Deleted Firebase user: ${uid}`);
+                } catch (firebaseError) {
+                    firebaseErrors++;
+                    console.error(`⚠️ Failed to delete Firebase user ${uid}:`, firebaseError.message);
+                }
+            }
+        }
+
         res.json({
             success: true,
-            message: `Successfully deleted ${result.rowCount} student(s) from ${instituteName}`,
-            deleted_count: result.rowCount
+            message: `Successfully deleted ${deleteResult.rowCount} student(s) from ${instituteName}`,
+            deleted_count: deleteResult.rowCount,
+            firebase_deleted: firebaseDeleteCount,
+            firebase_errors: firebaseErrors
         });
 
     } catch (error) {
