@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const verifyAdmin = require('../middleware/verifyAdmin');
+const { generateViolationsExcel } = require('../services/violationsExportService');
 
 // Get all AI violations for a specific test
 router.get('/violations/test/:testId', verifyAdmin, async (req, res) => {
@@ -169,6 +170,40 @@ router.get('/violations/by-student/:testId', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch violations by student'
+        });
+    }
+});
+
+// Export violations report to Excel
+router.get('/violations/export/:testId', verifyAdmin, async (req, res) => {
+    try {
+        const { testId } = req.params;
+        
+        const { buffer, filename } = await generateViolationsExcel(testId);
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error exporting violations:', error);
+        
+        if (error.message === 'Test not found') {
+            return res.status(404).json({
+                success: false,
+                message: 'Test not found'
+            });
+        }
+        
+        if (error.message === 'No violations found for this test') {
+            return res.status(404).json({
+                success: false,
+                message: 'No violations found for this test'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Failed to export violations report'
         });
     }
 });

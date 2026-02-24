@@ -306,10 +306,8 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
         }
 
         // 2. Fetch Questions (excluding correct_option to prevent cheating)
-        // Use caching for questions since they don't change during exam
-        const cacheKey = `test_questions_${testId}`;
-        const questionsResult = await cachedQuery(
-            cacheKey,
+        // Note: Don't cache shuffled questions as each student gets different order
+        const questionsResult = await pool.query(
             `SELECT 
                 id, 
                 question_text as question, 
@@ -320,18 +318,34 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
                 marks
             FROM questions 
             WHERE test_id = $1
-            ORDER BY id ASC`,
-            [testId],
-            15 * 60 * 1000 // Cache for 15 minutes
+            ORDER BY MD5(CONCAT(id::text, $2::text)) ASC`,
+            [testId, studentId] // Use studentId as seed for consistent shuffling
         );
 
-        // Transform questions to frontend format
-        const questions = questionsResult.rows.map(q => ({
-            id: q.id,
-            question: q.question,
-            options: [q.option_a, q.option_b, q.option_c, q.option_d].filter(opt => opt !== null && opt !== ''),
-            marks: q.marks
-        }));
+        // Transform questions to frontend format with shuffled options
+        const questions = questionsResult.rows.map(q => {
+            const originalOptions = [q.option_a, q.option_b, q.option_c, q.option_d].filter(opt => opt !== null && opt !== '');
+            
+            // Create deterministic shuffle seed for this student + question
+            const shuffleSeed = parseInt(require('crypto').createHash('md5')
+                .update(`${q.id}_${studentId}`)
+                .digest('hex')
+                .substring(0, 8), 16);
+            
+            // Shuffle options using seeded random
+            const shuffledOptions = [...originalOptions];
+            for (let i = shuffledOptions.length - 1; i > 0; i--) {
+                const j = Math.floor(((shuffleSeed + i) * 2654435761) % (i + 1));
+                [shuffledOptions[i], shuffledOptions[j]] = [shuffledOptions[j], shuffledOptions[i]];
+            }
+            
+            return {
+                id: q.id,
+                question: q.question,
+                options: shuffledOptions,
+                marks: q.marks
+            };
+        });
 
         // CODE EXECUTION & CODING PROBLEMS - TEMPORARILY DISABLED
         // Fetch coding questions for this test
@@ -572,7 +586,7 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
             });
         }
 
-        // 4. Fetch all questions with correct answers
+        // 4. Fetch all questions with correct answers (shuffled same as during test)
         const questionsResult = await pool.query(`
             SELECT 
                 id, 
@@ -585,15 +599,17 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
                 marks
             FROM questions 
             WHERE test_id = $1
-            ORDER BY id ASC
-        `, [testId]);
+            ORDER BY MD5(CONCAT(id::text, $2::text)) ASC
+        `, [testId, studentId]);
 
         if (questionsResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Test not found'
             });
-        }        // 3. Calculate marks
+        }
+
+        // 3. Calculate marks
         let totalMarks = 0;
         let marksObtained = 0;
         const questionResults = [];
@@ -601,24 +617,47 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
         questionsResult.rows.forEach((question, index) => {
             totalMarks += question.marks || 1;
             
+            // Reconstruct shuffled options to find correct mapping
+            const originalOptions = [question.option_a, question.option_b, question.option_c, question.option_d].filter(opt => opt !== null && opt !== '');
+            
+            const shuffleSeed = parseInt(require('crypto').createHash('md5')
+                .update(`${question.id}_${studentId}`)
+                .digest('hex')
+                .substring(0, 8), 16);
+            
+            // Create option mapping
+            const optionMapping = ['A', 'B', 'C', 'D'].slice(0, originalOptions.length);
+            const shuffledMapping = [...optionMapping];
+            for (let i = shuffledMapping.length - 1; i > 0; i--) {
+                const j = Math.floor(((shuffleSeed + i) * 2654435761) % (i + 1));
+                [shuffledMapping[i], shuffledMapping[j]] = [shuffledMapping[j], shuffledMapping[i]];
+            }
+            
             // Get student's answer for this question
             const studentAnswer = answers[index]; // answers is object with index as key
             
-            // Map correct_option (A, B, C, D) to index (0, 1, 2, 3)
-            const correctOptionMap = { 'A': 0, 'B': 1, 'C': 2, 'D': 3 };
-            const correctAnswerIndex = correctOptionMap[question.correct_option];
-            
-            const isCorrect = studentAnswer === correctAnswerIndex;
-            
-            if (isCorrect) {
-                marksObtained += question.marks || 1;
+            // Check if answer is correct (considering shuffled options)
+            let isCorrect = false;
+            if (studentAnswer !== undefined && studentAnswer !== null) {
+                // studentAnswer is the index from frontend (0, 1, 2, 3)
+                // We need to map this back to original option to check correctness
+                const originalOptionIndex = ['A', 'B', 'C', 'D'].indexOf(question.correct_option.toUpperCase());
+                
+                // Find where the correct option ended up after shuffling
+                const correctShuffledIndex = shuffledMapping.indexOf(question.correct_option.toUpperCase());
+                
+                isCorrect = studentAnswer === correctShuffledIndex;
+                
+                if (isCorrect) {
+                    marksObtained += question.marks || 1;
+                }
             }
 
             questionResults.push({
                 questionId: question.id,
                 questionText: question.question_text,
                 studentAnswer: studentAnswer,
-                correctAnswer: correctAnswerIndex,
+                correctAnswer: shuffledMapping.indexOf(question.correct_option.toUpperCase()),
                 isCorrect: isCorrect,
                 marks: question.marks || 1
             });
@@ -911,6 +950,78 @@ router.post('/create', verifyAdmin, async (req, res) => {
         });
     } finally {
         client.release();
+    }
+});
+
+/**
+ * DELETE /api/student/bulk
+ * Delete multiple students at once (admin only)
+ * Also deletes users from Firebase Authentication
+ */
+router.delete('/bulk', verifyAdmin, async (req, res) => {
+    try {
+        const { student_ids } = req.body;
+
+        if (!student_ids || !Array.isArray(student_ids) || student_ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'student_ids array is required'
+            });
+        }
+
+        console.log(`[BULK DELETE] Starting deletion for ${student_ids.length} students`);
+
+        // Get students' firebase_uids before deleting
+        const studentsResult = await pool.query(
+            'SELECT id, firebase_uid, full_name, email FROM students WHERE id = ANY($1)',
+            [student_ids]
+        );
+
+        const students = studentsResult.rows;
+        const firebaseUids = students.filter(s => s.firebase_uid).map(s => s.firebase_uid);
+
+        // Delete from database
+        const deleteResult = await pool.query(
+            'DELETE FROM students WHERE id = ANY($1) RETURNING *',
+            [student_ids]
+        );
+
+        // Delete from Firebase
+        let firebaseDeleteCount = 0;
+        let firebaseErrors = 0;
+
+        if (firebaseUids.length > 0) {
+            const admin = require('../config/firebase');
+            
+            for (const uid of firebaseUids) {
+                try {
+                    await admin.auth().deleteUser(uid);
+                    firebaseDeleteCount++;
+                    console.log(`✅ Deleted Firebase user: ${uid}`);
+                } catch (firebaseError) {
+                    firebaseErrors++;
+                    console.error(`⚠️ Failed to delete Firebase user ${uid}:`, firebaseError.message);
+                }
+            }
+        }
+
+        console.log(`[BULK DELETE] Successfully deleted ${deleteResult.rowCount} students`);
+
+        res.json({
+            success: true,
+            message: `Successfully deleted ${deleteResult.rowCount} student(s)`,
+            deleted_count: deleteResult.rowCount,
+            firebase_deleted: firebaseDeleteCount,
+            firebase_errors: firebaseErrors > 0 ? firebaseErrors : undefined
+        });
+
+    } catch (error) {
+        console.error('[BULK DELETE] Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete students',
+            error: error.message
+        });
     }
 });
 

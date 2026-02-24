@@ -177,7 +177,10 @@ router.get('/:id', verifyAdmin, async (req, res) => {
                 t.max_attempts,
                 t.passing_percentage,
                 t.start_datetime,
-                t.end_datetime
+                t.end_datetime,
+                t.created_by,
+                t.updated_by,
+                t.updated_at
             FROM tests t
             WHERE t.id = $1
         `, [id]);
@@ -464,6 +467,9 @@ router.put('/:id/details', verifyAdmin, async (req, res) => {
             });
         }
 
+        // Get admin user from token
+        const adminUser = req.user?.email || req.user?.username || 'admin';
+
         // Update test metadata only (no questions modification)
         const result = await pool.query(`
             UPDATE tests 
@@ -474,13 +480,15 @@ router.put('/:id/details', verifyAdmin, async (req, res) => {
                 max_attempts = $4, 
                 passing_percentage = $5, 
                 start_datetime = $6, 
-                end_datetime = $7
+                end_datetime = $7,
+                updated_by = $9,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = $8
             RETURNING 
                 id, title, job_role, description, duration, max_attempts, passing_percentage,
                 start_datetime AT TIME ZONE 'Asia/Kolkata' as start_datetime,
                 end_datetime AT TIME ZONE 'Asia/Kolkata' as end_datetime,
-                status, created_at
+                status, created_at, created_by, updated_by, updated_at
         `, [
             job_role.trim(),
             description ? description.trim() : '',
@@ -489,7 +497,8 @@ router.put('/:id/details', verifyAdmin, async (req, res) => {
             parseInt(passing_percentage) || 50,
             start_datetime || null,
             end_datetime || null,
-            id
+            id,
+            adminUser
         ]);
 
         console.log('✅ Test details updated successfully');
@@ -561,6 +570,9 @@ router.put('/:id', verifyAdmin, async (req, res) => {
         const defaultJobRole = jobRoles && jobRoles.length > 0 ? jobRoles[0].job_role : '';
         const defaultJobDescription = jobRoles && jobRoles.length > 0 ? jobRoles[0].job_description : '';
         
+        // Get admin user from token
+        const adminUser = req.user?.email || req.user?.username || 'admin';
+        
         await client.query(`
             UPDATE tests 
             SET title = $1, 
@@ -570,7 +582,9 @@ router.put('/:id', verifyAdmin, async (req, res) => {
                 max_attempts = $5, 
                 passing_percentage = $6, 
                 start_datetime = $7, 
-                end_datetime = $8
+                end_datetime = $8,
+                updated_by = $10,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = $9
         `, [
             testName,
@@ -581,7 +595,8 @@ router.put('/:id', verifyAdmin, async (req, res) => {
             parseInt(passingPercentage) || 50,
             startDateTime || null,
             endDateTime || null,
-            id
+            id,
+            adminUser
         ]);
 
         // Update job roles
@@ -637,6 +652,87 @@ router.put('/:id', verifyAdmin, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to update test',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * DELETE /api/tests/bulk
+ * Delete multiple tests at once
+ */
+router.delete('/bulk', verifyAdmin, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { test_ids } = req.body;
+
+        if (!test_ids || !Array.isArray(test_ids) || test_ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'test_ids array is required'
+            });
+        }
+
+        console.log(`[BULK DELETE] Starting deletion for ${test_ids.length} tests`);
+        
+        await client.query('BEGIN');
+        
+        let deletedCount = 0;
+        const errors = [];
+
+        for (const testId of test_ids) {
+            try {
+                // Get test details
+                const testResult = await client.query('SELECT title FROM tests WHERE id = $1', [testId]);
+                
+                if (testResult.rows.length === 0) {
+                    errors.push({ testId, error: 'Test not found' });
+                    continue;
+                }
+                
+                const testTitle = testResult.rows[0].title;
+                
+                // Delete related data
+                await client.query('DELETE FROM institute_test_assignments WHERE test_id = $1', [testId]);
+                await client.query('DELETE FROM test_assignments WHERE test_id = $1', [testId]);
+                await client.query('DELETE FROM test_job_roles WHERE test_id = $1', [testId]);
+                
+                // Delete exams and results
+                const examsResult = await client.query('SELECT id FROM exams WHERE name = $1', [testTitle]);
+                const examIds = examsResult.rows.map(row => row.id);
+                
+                if (examIds.length > 0) {
+                    await client.query('DELETE FROM results WHERE exam_id = ANY($1)', [examIds]);
+                    await client.query('DELETE FROM exams WHERE id = ANY($1)', [examIds]);
+                }
+                
+                await client.query('DELETE FROM exam_progress WHERE test_id = $1', [testId]);
+                await client.query('DELETE FROM questions WHERE test_id = $1', [testId]);
+                await client.query('DELETE FROM tests WHERE id = $1', [testId]);
+                
+                deletedCount++;
+            } catch (error) {
+                errors.push({ testId, error: error.message });
+            }
+        }
+        
+        await client.query('COMMIT');
+        console.log(`[BULK DELETE] Successfully deleted ${deletedCount} tests`);
+
+        res.json({
+            success: true,
+            message: `Successfully deleted ${deletedCount} test(s)`,
+            deleted_count: deletedCount,
+            errors: errors.length > 0 ? errors : undefined
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('[BULK DELETE] Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete tests',
             error: error.message
         });
     } finally {
@@ -789,13 +885,16 @@ router.post('/:id/clone', verifyAdmin, async (req, res) => {
         const test = originalTest.rows[0];
         console.log(`[CLONE TEST] Original test: ${test.title}`);
 
+        // Get admin user from token
+        const adminUser = req.user?.email || req.user?.username || 'admin';
+
         // Create new test with same settings but draft status
         const newTest = await client.query(`
             INSERT INTO tests (
                 title, description, duration, max_attempts, 
-                start_datetime, end_datetime, status, passing_percentage
+                start_datetime, end_datetime, status, passing_percentage, created_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7)
+            VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8)
             RETURNING *
         `, [
             new_title.trim(),
@@ -804,7 +903,8 @@ router.post('/:id/clone', verifyAdmin, async (req, res) => {
             test.max_attempts,
             test.start_datetime,
             test.end_datetime,
-            test.passing_percentage || 50
+            test.passing_percentage || 50,
+            adminUser
         ]);
 
         const newTestId = newTest.rows[0].id;

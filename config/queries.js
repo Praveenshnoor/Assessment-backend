@@ -38,6 +38,15 @@ function buildQuery(filters = {}) {
         END as status,
         r.created_at AS attempt_date,
         t.id as test_id,
+        -- Violation counts
+        COALESCE(SUM(CASE WHEN pv.violation_type = 'no_face' THEN 1 ELSE 0 END), 0) as no_face_count,
+        COALESCE(SUM(CASE WHEN pv.violation_type = 'multiple_faces' THEN 1 ELSE 0 END), 0) as multiple_faces_count,
+        COALESCE(SUM(CASE WHEN pv.violation_type = 'phone_detected' THEN 1 ELSE 0 END), 0) as phone_detected_count,
+        COALESCE(SUM(CASE WHEN pv.violation_type = 'loud_noise' THEN 1 ELSE 0 END), 0) as loud_noise_count,
+        COALESCE(SUM(CASE WHEN pv.violation_type = 'voice_detected' THEN 1 ELSE 0 END), 0) as voice_detected_count,
+        COALESCE(SUM(CASE WHEN pv.violation_type != 'microphone_silent' THEN 1 ELSE 0 END), 0) as total_violations,
+        -- High severity violations count for flagged indicator
+        COALESCE(SUM(CASE WHEN pv.severity = 'high' THEN 1 ELSE 0 END), 0) as high_severity_count,
         ROW_NUMBER() OVER (
           PARTITION BY s.id, t.id 
           ORDER BY r.marks_obtained DESC, r.created_at DESC
@@ -46,6 +55,7 @@ function buildQuery(filters = {}) {
       INNER JOIN students s ON r.student_id = s.id
       INNER JOIN exams e ON r.exam_id = e.id
       LEFT JOIN tests t ON t.title = e.name
+      LEFT JOIN proctoring_violations pv ON pv.student_id = s.id::text AND pv.test_id = t.id
       WHERE 1=1 AND t.id IS NOT NULL
   `;
   
@@ -89,6 +99,8 @@ function buildQuery(filters = {}) {
   
   // close the CTE and select only rank 1 (highest score per student per exam)
   query += `
+      GROUP BY s.id, s.full_name, s.email, s.resume_link, e.id, e.name, e.date,
+               r.marks_obtained, r.total_marks, r.created_at, t.id, t.passing_percentage
     )
     SELECT 
       student_id,
@@ -102,7 +114,14 @@ function buildQuery(filters = {}) {
       total_marks,
       percentage,
       status,
-      attempt_date
+      attempt_date,
+      no_face_count,
+      multiple_faces_count,
+      phone_detected_count,
+      loud_noise_count,
+      voice_detected_count,
+      total_violations,
+      high_severity_count
     FROM ranked_results
     WHERE rank = 1
     ORDER BY exam_date DESC, student_name ASC

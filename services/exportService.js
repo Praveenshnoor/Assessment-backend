@@ -34,7 +34,14 @@ function formatResultsForExcel(rows) {
       marks_obtained: row.marks_obtained,
       total_marks: row.total_marks,
       percentage: percentage,
-      status: row.status || (percentage >= 50 ? 'Pass' : 'Fail')
+      status: row.status || (percentage >= 50 ? 'Pass' : 'Fail'),
+      no_face: row.no_face_count || 0,
+      multiple_faces: row.multiple_faces_count || 0,
+      phone_detected: row.phone_detected_count || 0,
+      loud_noise: row.loud_noise_count || 0,
+      voice_detected: row.voice_detected_count || 0,
+      total_violations: row.total_violations || 0,
+      flagged: (row.high_severity_count >= 3) ? 'Yes' : 'No'
     };
   });
 }
@@ -59,7 +66,14 @@ async function generateExcelFile(data, filename) {
     { header: 'Marks Obtained', key: 'marks_obtained', width: 15 },
     { header: 'Total Marks', key: 'total_marks', width: 12 },
     { header: 'Percentage', key: 'percentage', width: 12 },
-    { header: 'Status', key: 'status', width: 10 }
+    { header: 'Status', key: 'status', width: 10 },
+    { header: 'No Face', key: 'no_face', width: 10 },
+    { header: 'Multiple Faces', key: 'multiple_faces', width: 15 },
+    { header: 'Phone Detected', key: 'phone_detected', width: 15 },
+    { header: 'Loud Noise', key: 'loud_noise', width: 12 },
+    { header: 'Voice Detected', key: 'voice_detected', width: 15 },
+    { header: 'Total Violations', key: 'total_violations', width: 15 },
+    { header: 'Flagged', key: 'flagged', width: 10 }
   ];
 
   // style the header row

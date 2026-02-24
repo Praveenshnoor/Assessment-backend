@@ -27,6 +27,13 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
           t.passing_percentage,
           t.start_datetime,
           t.end_datetime,
+          COALESCE(SUM(CASE WHEN pv.violation_type = 'no_face' THEN 1 ELSE 0 END), 0) as no_face_count,
+          COALESCE(SUM(CASE WHEN pv.violation_type = 'multiple_faces' THEN 1 ELSE 0 END), 0) as multiple_faces_count,
+          COALESCE(SUM(CASE WHEN pv.violation_type = 'phone_detected' THEN 1 ELSE 0 END), 0) as phone_detected_count,
+          COALESCE(SUM(CASE WHEN pv.violation_type = 'loud_noise' THEN 1 ELSE 0 END), 0) as loud_noise_count,
+          COALESCE(SUM(CASE WHEN pv.violation_type = 'voice_detected' THEN 1 ELSE 0 END), 0) as voice_detected_count,
+          COALESCE(SUM(CASE WHEN pv.violation_type != 'microphone_silent' THEN 1 ELSE 0 END), 0) as total_violations,
+          COALESCE(SUM(CASE WHEN pv.severity = 'high' THEN 1 ELSE 0 END), 0) as high_severity_count,
           ROW_NUMBER() OVER (
             PARTITION BY s.id, t.id 
             ORDER BY r.marks_obtained DESC, r.created_at DESC
@@ -35,7 +42,9 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
         INNER JOIN exams e ON r.exam_id = e.id
         INNER JOIN students s ON r.student_id = s.id
         LEFT JOIN tests t ON t.title = e.name
+        LEFT JOIN proctoring_violations pv ON pv.student_id = s.id::text AND pv.test_id = t.id
         WHERE t.id IS NOT NULL
+        GROUP BY r.id, r.marks_obtained, r.total_marks, r.created_at, e.name, e.date, s.full_name, s.roll_number, s.email, s.id, t.id, t.duration, t.max_attempts, t.passing_percentage, t.start_datetime, t.end_datetime
       )
       SELECT 
         id,
@@ -53,7 +62,14 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
         max_attempts,
         passing_percentage,
         start_datetime,
-        end_datetime
+        end_datetime,
+        no_face_count,
+        multiple_faces_count,
+        phone_detected_count,
+        loud_noise_count,
+        voice_detected_count,
+        total_violations,
+        high_severity_count
       FROM ranked_results
       WHERE rank = 1
       ORDER BY submitted_at DESC
