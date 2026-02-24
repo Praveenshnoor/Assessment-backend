@@ -235,3 +235,20 @@ CREATE INDEX IF NOT EXISTS idx_severity ON proctoring_violations(severity);
 COMMENT ON TABLE proctoring_violations IS 'Stores AI-detected cheating violations during exams';
 COMMENT ON COLUMN proctoring_violations.violation_type IS 'Type: multiple_faces, no_face, phone_detected, looking_down';
 COMMENT ON COLUMN proctoring_violations.severity IS 'Severity: high, medium, low';
+
+-- ============================================
+-- SYSTEM SETTINGS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS system_settings (
+    id SERIAL PRIMARY KEY,
+    retry_timer_minutes INTEGER DEFAULT 5,
+    maintenance_mode BOOLEAN DEFAULT false,
+    maintenance_message TEXT DEFAULT 'The system is currently undergoing scheduled maintenance. Please check back later.',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default settings if empty
+INSERT INTO system_settings (id, retry_timer_minutes, maintenance_mode)
+VALUES (1, 5, false)
+ON CONFLICT (id) DO NOTHING;
+

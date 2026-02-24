@@ -22,12 +22,14 @@ const healthRoutes = require('./routes/health');
 const institutesRoutes = require('./routes/institutes');
 const proctoringRoutes = require('./routes/proctoring');
 const feedbackRoutes = require('./routes/feedback');
+const settingsRoutes = require('./routes/settings');
 // CODE EXECUTION & CODING PROBLEMS - TEMPORARILY DISABLED
 // const codeExecutionRoutes = require('./routes/codeExecution.routes');
 // const codingQuestionsRoutes = require('./routes/codingQuestions.routes');
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
+const { checkMaintenance } = require('./middleware/maintenance');
 
 // Initialize Express app
 const app = express();
@@ -89,7 +91,7 @@ app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        
+
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -116,15 +118,16 @@ app.use('/api', apiLimiter); // General API endpoints
 
 
 // API Routes
-app.use('/api', authRoutes);
-app.use('/api/admin', adminAuthRoutes);
-app.use('/api/upload', uploadRoutes);
-app.use('/api/student', studentRoutes);
-app.use('/api/export', exportRoutes);
-app.use('/api/tests', testRoutes);
+app.use('/api', checkMaintenance, authRoutes); // Protect student auth with maintenance check
+app.use('/api/admin', adminAuthRoutes); // Admin bypasses maintenance
+app.use('/api/upload', checkMaintenance, uploadRoutes);
+app.use('/api/student', checkMaintenance, studentRoutes);
+app.use('/api/export', exportRoutes); // Admin action, bypasses maintenance check usually (or requires admin token anyway)
+app.use('/api/tests', checkMaintenance, testRoutes);
 app.use('/api/institutes', institutesRoutes);
 app.use('/api/proctoring', proctoringRoutes);
-app.use('/api/feedback', feedbackRoutes);
+app.use('/api/feedback', checkMaintenance, feedbackRoutes);
+app.use('/api/settings', settingsRoutes);
 // CODE EXECUTION & CODING PROBLEMS - TEMPORARILY DISABLED
 // app.use('/api/code', codeExecutionRoutes);
 // app.use('/api/coding-questions', codingQuestionsRoutes);
@@ -166,14 +169,14 @@ server.listen(PORT, () => {
         pid: process.pid,
         nodeVersion: process.version,
     }, 'Server started successfully');
-    
+
     console.log(`✅ Server running on port ${PORT}`);
     console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔗 API: http://localhost:${PORT}`);
     console.log(`🔌 Socket.io: Ready for proctoring connections`);
     console.log(`💚 Health: http://localhost:${PORT}/health`);
     console.log(`📈 Metrics: http://localhost:${PORT}/metrics`);
-    
+
     // Signal PM2 that app is ready
     if (process.send) {
         process.send('ready');
@@ -213,14 +216,14 @@ function calculateMonitoredCount(totalStudents) {
 function selectStudentsForMonitoring() {
     const allStudents = Array.from(activeSessions.keys());
     const monitorCount = calculateMonitoredCount(allStudents.length);
-    
+
     // Clear previous selection
     monitoredStudents.clear();
-    
+
     // Randomly select students
     const shuffled = allStudents.sort(() => 0.5 - Math.random());
     const selected = shuffled.slice(0, monitorCount);
-    
+
     selected.forEach(studentId => {
         monitoredStudents.add(studentId);
         const session = activeSessions.get(studentId);
@@ -228,7 +231,7 @@ function selectStudentsForMonitoring() {
             session.isMonitored = true;
         }
     });
-    
+
     // Mark non-monitored students
     allStudents.forEach(studentId => {
         if (!monitoredStudents.has(studentId)) {
@@ -238,13 +241,13 @@ function selectStudentsForMonitoring() {
             }
         }
     });
-    
+
     logger.info({
         totalStudents: allStudents.length,
         monitoredCount: selected.length,
-        sampleRate: (selected.length/allStudents.length*100).toFixed(1) + '%'
+        sampleRate: (selected.length / allStudents.length * 100).toFixed(1) + '%'
     }, 'Proctoring monitoring pool updated');
-    
+
     // Notify all students about their monitoring status
     allStudents.forEach(studentId => {
         const session = activeSessions.get(studentId);
@@ -255,7 +258,7 @@ function selectStudentsForMonitoring() {
             });
         }
     });
-    
+
     // Notify admins about monitoring pool update
     io.to('admin-room').emit('monitoring-pool-updated', {
         totalStudents: allStudents.length,
@@ -275,10 +278,10 @@ let rotationInterval = setInterval(() => {
 }, PROCTORING_CONFIG.ROTATION_INTERVAL * 60 * 1000);
 
 io.on('connection', (socket) => {
-    logger.info({ 
-        socketId: socket.id, 
+    logger.info({
+        socketId: socket.id,
         transport: socket.conn.transport.name,
-        remoteAddress: socket.conn.remoteAddress 
+        remoteAddress: socket.conn.remoteAddress
     }, 'Socket.io client connected');
 
     // Connection timeout handling
@@ -292,17 +295,17 @@ io.on('connection', (socket) => {
 
     // Error handling
     socket.on('error', (error) => {
-        logger.error({ 
-            socketId: socket.id, 
+        logger.error({
+            socketId: socket.id,
             studentId: socket.studentId,
             error: error.message,
-            stack: error.stack 
+            stack: error.stack
         }, 'Socket.io error occurred');
-        
+
         // Emit error to client for handling
-        socket.emit('socket-error', { 
-            message: 'Connection error occurred', 
-            shouldReconnect: true 
+        socket.emit('socket-error', {
+            message: 'Connection error occurred',
+            shouldReconnect: true
         });
     });
 
@@ -315,12 +318,12 @@ io.on('connection', (socket) => {
 
     // Handle reconnection
     socket.on('reconnect-request', (data) => {
-        logger.info({ 
-            socketId: socket.id, 
-            studentId: data?.studentId 
+        logger.info({
+            socketId: socket.id,
+            studentId: data?.studentId
         }, 'Client requesting reconnection');
-        
-        socket.emit('reconnect-approved', { 
+
+        socket.emit('reconnect-approved', {
             message: 'Reconnection approved',
             timestamp: new Date().toISOString()
         });
@@ -329,7 +332,7 @@ io.on('connection', (socket) => {
     // Student joins proctoring session
     socket.on('student:join-proctoring', (data) => {
         const { studentId, studentName, testId, testTitle } = data;
-        
+
         activeSessions.set(studentId, {
             socketId: socket.id,
             studentId,
@@ -378,7 +381,7 @@ io.on('connection', (socket) => {
         }));
 
         socket.emit('active-sessions', sessions);
-        
+
         // Send monitoring configuration
         socket.emit('monitoring-config', {
             sampleRate: PROCTORING_CONFIG.SAMPLE_RATE,
@@ -400,7 +403,7 @@ io.on('connection', (socket) => {
     // Frame-based proctoring - Receive frame from student (ONLY if monitored)
     socket.on('proctoring:frame', (data) => {
         const { studentId, studentName, testId, testTitle, frame, timestamp, aiViolations } = data;
-        
+
         // Only relay frames from monitored students
         if (monitoredStudents.has(studentId)) {
             // Relay frame to all admins in monitoring room
@@ -419,12 +422,12 @@ io.on('connection', (socket) => {
     // AI Violation detected - Store and alert admins
     socket.on('proctoring:ai-violation', async (data) => {
         const { studentId, testId, violation, timestamp } = data;
-        
-        logger.warn({ 
-            studentId, 
-            testId, 
+
+        logger.warn({
+            studentId,
+            testId,
             violationType: violation.type,
-            severity: violation.severity 
+            severity: violation.severity
         }, 'AI Violation detected');
 
         try {
@@ -454,7 +457,7 @@ io.on('connection', (socket) => {
     socket.on('student:leave-proctoring', (data) => {
         if (data && data.studentId) {
             logger.info({ studentId: data.studentId, studentName: data.studentName }, 'Student leaving proctoring');
-            
+
             // Notify admins
             io.to('admin-room').emit('student:left', {
                 studentId: data.studentId,
@@ -465,9 +468,9 @@ io.on('connection', (socket) => {
             if (activeSessions.has(data.studentId)) {
                 activeSessions.delete(data.studentId);
             }
-            
+
             monitoredStudents.delete(data.studentId);
-            
+
             // Reselect monitored students after student leaves
             if (activeSessions.size > 0) {
                 selectStudentsForMonitoring();
@@ -482,11 +485,11 @@ io.on('connection', (socket) => {
 
     // Disconnect handling with comprehensive cleanup
     socket.on('disconnect', (reason) => {
-        logger.debug({ 
-            socketId: socket.id, 
+        logger.debug({
+            socketId: socket.id,
             studentId: socket.studentId,
             isAdmin: socket.isAdmin,
-            reason 
+            reason
         }, 'Socket.io client disconnected');
 
         // Clear any pending timeouts
@@ -495,27 +498,27 @@ io.on('connection', (socket) => {
         if (socket.isAdmin) {
             adminSockets.delete(socket.id);
             logger.info({ socketId: socket.id, reason }, 'Admin left monitoring room');
-            
+
             // Notify remaining admins
             io.to('admin-room').emit('admin:left', {
                 socketId: socket.id,
                 timestamp: new Date(),
                 reason
             });
-            
+
         } else if (socket.studentId) {
             const session = activeSessions.get(socket.studentId);
             if (session) {
-                logger.info({ 
-                    studentId: socket.studentId, 
+                logger.info({
+                    studentId: socket.studentId,
                     studentName: session.studentName,
                     reason,
                     duration: new Date() - session.startTime
                 }, 'Student disconnected');
-                
+
                 // Remove from monitoring if they were being monitored
                 monitoredStudents.delete(socket.studentId);
-                
+
                 // Notify admins with disconnect reason
                 io.to('admin-room').emit('student:left', {
                     studentId: socket.studentId,
@@ -527,7 +530,7 @@ io.on('connection', (socket) => {
 
                 // Clean up session
                 activeSessions.delete(socket.studentId);
-                
+
                 // Reselect monitored students after someone leaves
                 if (activeSessions.size > 0) {
                     selectStudentsForMonitoring();
@@ -538,21 +541,21 @@ io.on('connection', (socket) => {
 
     // Handle connection errors specifically
     socket.on('connect_error', (error) => {
-        logger.error({ 
+        logger.error({
             socketId: socket.id,
             studentId: socket.studentId,
-            error: error.message 
+            error: error.message
         }, 'Socket.io connection error');
     });
 
     // Handle client-side errors
     socket.on('client-error', (errorData) => {
-        logger.error({ 
+        logger.error({
             socketId: socket.id,
             studentId: socket.studentId,
-            clientError: errorData 
+            clientError: errorData
         }, 'Client-side error reported');
-        
+
         // Optionally notify admins of client issues
         if (socket.studentId) {
             io.to('admin-room').emit('student:error', {
@@ -571,17 +574,17 @@ const CONNECTION_TIMEOUT_THRESHOLD = 60000; // 60 seconds
 setInterval(() => {
     const now = new Date();
     const staleConnections = [];
-    
+
     // Check for stale connections
     activeSessions.forEach((session, studentId) => {
         const socket = io.sockets.sockets.get(session.socketId);
-        
+
         if (!socket || !socket.connected) {
             staleConnections.push(studentId);
         } else if (session.lastPing && (now - session.lastPing) > CONNECTION_TIMEOUT_THRESHOLD) {
             // Connection seems stale, ping it
             socket.emit('health-check', { timestamp: now.toISOString() });
-            
+
             // If no response in 10 seconds, consider it stale
             setTimeout(() => {
                 const currentSession = activeSessions.get(studentId);
@@ -592,13 +595,13 @@ setInterval(() => {
             }, 10000);
         }
     });
-    
+
     // Clean up stale connections
     staleConnections.forEach(studentId => {
         const session = activeSessions.get(studentId);
         if (session) {
             logger.info({ studentId, studentName: session.studentName }, 'Cleaning up stale connection');
-            
+
             // Notify admins
             io.to('admin-room').emit('student:left', {
                 studentId,
@@ -606,18 +609,18 @@ setInterval(() => {
                 reason: 'connection_timeout',
                 timestamp: new Date()
             });
-            
+
             // Remove from monitoring and sessions
             monitoredStudents.delete(studentId);
             activeSessions.delete(studentId);
         }
     });
-    
+
     // Reselect monitored students if any were removed
     if (staleConnections.length > 0 && activeSessions.size > 0) {
         selectStudentsForMonitoring();
     }
-    
+
     // Log connection health stats periodically
     if (activeSessions.size > 0) {
         logger.debug({
@@ -641,16 +644,16 @@ io.engine.on('connection_error', (err) => {
 // Graceful shutdown
 const gracefulShutdown = (signal) => {
     logger.info({ signal }, 'Shutdown signal received, closing server gracefully');
-    
+
     server.close(() => {
         logger.info('HTTP server closed');
-        
+
         pool.end(() => {
             logger.info('Database pool closed');
             process.exit(0);
         });
     });
-    
+
     // Force shutdown after 30 seconds
     setTimeout(() => {
         logger.error('Forced shutdown after timeout');
