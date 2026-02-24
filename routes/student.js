@@ -849,95 +849,15 @@ router.post('/create', verifyAdmin, async (req, res) => {
 
         const newStudent = result.rows[0];
 
-        // Auto-assign tests that are assigned to this institute
-        let assignedTestsCount = 0;
-
-        // Method 1: Get tests assigned at institute level
-        const instituteRecord = await client.query(
-            'SELECT id FROM institutes WHERE name = $1 AND is_active = true',
-            [normalizedInstitute]
-        );
-
-        let testsToAssign = [];
-
-        if (instituteRecord.rows.length > 0) {
-            const instituteId = instituteRecord.rows[0].id;
-            const instituteTests = await client.query(
-                `SELECT test_id
-                 FROM institute_test_assignments
-                 WHERE institute_id = $1 AND is_active = true`,
-                [instituteId]
-            );
-            testsToAssign = instituteTests.rows.map(row => row.test_id);
-        }
-
-        // Method 2: Fallback - get tests assigned to other students from the same institute
-        if (testsToAssign.length === 0) {
-            const instituteTests = await client.query(
-                `SELECT DISTINCT ta.test_id
-                 FROM test_assignments ta
-                 JOIN students s ON ta.student_id = s.id
-                 WHERE LOWER(s.institute) = $1 AND ta.is_active = true`,
-                [normalizedInstitute]
-            );
-            testsToAssign = instituteTests.rows.map(row => row.test_id);
-        }
-
-        // Create test_assignments table if it doesn't exist
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS test_assignments (
-                id SERIAL PRIMARY KEY,
-                test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-                student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
-                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT true,
-                UNIQUE(test_id, student_id)
-            )
-        `);
-
-        // Assign tests to the new student
-        if (testsToAssign.length > 0) {
-            for (const testId of testsToAssign) {
-                await client.query(
-                    `INSERT INTO test_assignments (test_id, student_id, is_active)
-                     VALUES ($1, $2, true)
-                     ON CONFLICT (test_id, student_id) DO NOTHING`,
-                    [testId, newStudent.id]
-                );
-            }
-            assignedTestsCount = testsToAssign.length;
-        }
-
-        // Auto-assign ALL mock tests to every new student (regardless of institute)
-        try {
-            const mockTestsResult = await client.query(
-                'SELECT id FROM tests WHERE is_mock_test = true'
-            );
-            for (const mockTest of mockTestsResult.rows) {
-                await client.query(
-                    `INSERT INTO test_assignments (test_id, student_id, is_active)
-                     VALUES ($1, $2, true)
-                     ON CONFLICT (test_id, student_id) DO NOTHING`,
-                    [mockTest.id, newStudent.id]
-                );
-            }
-            if (mockTestsResult.rows.length > 0) {
-                console.log(`${mockTestsResult.rows.length} mock test(s) auto-assigned to new student: ${full_name}`);
-            }
-        } catch (mockErr) {
-            console.error('Warning: Could not auto-assign mock test:', mockErr.message);
-            // Don't fail student creation if mock test assignment fails
-        }
+        // No auto-assignment of tests for manually created students
+        // Admin will assign tests manually as needed
 
         await client.query('COMMIT');
 
         res.status(201).json({
             success: true,
-            message: assignedTestsCount > 0 
-                ? `Student created successfully and assigned ${assignedTestsCount} test(s) from institute`
-                : 'Student created successfully',
-            student: newStudent,
-            assigned_tests_count: assignedTestsCount
+            message: 'Student created successfully. No tests assigned - admin can assign tests manually.',
+            student: newStudent
         });
 
     } catch (error) {

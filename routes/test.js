@@ -1000,13 +1000,33 @@ router.post('/assign', verifyAdmin, async (req, res) => {
             )
         `);
 
-        // Insert assignments (on conflict, update assigned_at)
-        const insertPromises = student_ids.map(student_id =>
+        // Check which students already have this test assigned
+        const existingAssignments = await client.query(`
+            SELECT student_id FROM test_assignments 
+            WHERE test_id = $1 AND student_id = ANY($2) AND is_active = true
+        `, [test_id, student_ids]);
+
+        const alreadyAssignedIds = existingAssignments.rows.map(row => row.student_id);
+        const newAssignmentIds = student_ids.filter(id => !alreadyAssignedIds.includes(id));
+
+        // If all students already have this test assigned
+        if (newAssignmentIds.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: student_ids.length === 1 
+                    ? 'This test is already assigned to this student'
+                    : `All ${student_ids.length} selected student(s) already have this test assigned`,
+                already_assigned: student_ids.length,
+                newly_assigned: 0
+            });
+        }
+
+        // Insert assignments only for students who don't have it yet
+        const insertPromises = newAssignmentIds.map(student_id =>
             client.query(`
                 INSERT INTO test_assignments (test_id, student_id, is_active)
                 VALUES ($1, $2, true)
-                ON CONFLICT (test_id, student_id) 
-                DO UPDATE SET assigned_at = CURRENT_TIMESTAMP, is_active = true
             `, [test_id, student_id])
         );
 
@@ -1016,10 +1036,20 @@ router.post('/assign', verifyAdmin, async (req, res) => {
         // Invalidate cache
         // await cache.delPattern('cache:*'); // DISABLED: Redis
 
+        // Build response message
+        let message = '';
+        if (alreadyAssignedIds.length > 0) {
+            message = `${alreadyAssignedIds.length} student(s) already have this test assigned. Assigning to ${newAssignmentIds.length} student(s).`;
+        } else {
+            message = `Test assigned to ${newAssignmentIds.length} student(s)`;
+        }
+
         res.json({
             success: true,
-            message: `Test assigned to ${student_ids.length} student(s)`,
-            assigned_count: student_ids.length
+            message: message,
+            newly_assigned: newAssignmentIds.length,
+            already_assigned: alreadyAssignedIds.length,
+            total_requested: student_ids.length
         });
     } catch (error) {
         await client.query('ROLLBACK');

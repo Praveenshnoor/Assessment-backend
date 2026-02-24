@@ -321,7 +321,7 @@ router.get('/:instituteName/students', verifyAdmin, async (req, res) => {
                 s.roll_number,
                 s.institute,
                 s.created_at,
-                COUNT(DISTINCT ta.test_id) as assigned_tests_count
+                COUNT(DISTINCT ta.test_id) FILTER (WHERE ta.is_active = true) as assigned_tests_count
             FROM students s
             LEFT JOIN test_assignments ta ON s.id = ta.student_id
             WHERE LOWER(s.institute) = LOWER($1)
