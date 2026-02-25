@@ -66,8 +66,6 @@ router.post('/register', verifyToken, async (req, res) => {
             }
         }
 
-        // REMOVED: CREATE TABLE IF NOT EXISTS for institutes
-        // This should be in migration, not per registration
         // Check if institute exists and verify registration is allowed
         console.log('[REGISTRATION] Checking institute status...');
         const instituteCheck = await client.query(

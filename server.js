@@ -22,12 +22,14 @@ const healthRoutes = require('./routes/health');
 const institutesRoutes = require('./routes/institutes');
 const proctoringRoutes = require('./routes/proctoring');
 const feedbackRoutes = require('./routes/feedback');
+const settingsRoutes = require('./routes/settings');
 // CODE EXECUTION & CODING PROBLEMS - TEMPORARILY DISABLED
 // const codeExecutionRoutes = require('./routes/codeExecution.routes');
 // const codingQuestionsRoutes = require('./routes/codingQuestions.routes');
 
 // Import middleware
 const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
+const { checkMaintenance } = require('./middleware/maintenance');
 
 // Initialize Express app
 const app = express();
@@ -116,15 +118,16 @@ app.use('/api', apiLimiter); // General API endpoints
 
 
 // API Routes
-app.use('/api', authRoutes);
-app.use('/api/admin', adminAuthRoutes);
-app.use('/api/upload', uploadRoutes);
-app.use('/api/student', studentRoutes);
-app.use('/api/export', exportRoutes);
-app.use('/api/tests', testRoutes);
+app.use('/api', checkMaintenance, authRoutes); // Protect student auth with maintenance check
+app.use('/api/admin', adminAuthRoutes); // Admin bypasses maintenance
+app.use('/api/upload', checkMaintenance, uploadRoutes);
+app.use('/api/student', checkMaintenance, studentRoutes);
+app.use('/api/export', exportRoutes); // Admin action, bypasses maintenance check usually (or requires admin token anyway)
+app.use('/api/tests', checkMaintenance, testRoutes);
 app.use('/api/institutes', institutesRoutes);
 app.use('/api/proctoring', proctoringRoutes);
-app.use('/api/feedback', feedbackRoutes);
+app.use('/api/feedback', checkMaintenance, feedbackRoutes);
+app.use('/api/settings', settingsRoutes);
 // CODE EXECUTION & CODING PROBLEMS - TEMPORARILY DISABLED
 // app.use('/api/code', codeExecutionRoutes);
 // app.use('/api/coding-questions', codingQuestionsRoutes);

@@ -11,8 +11,8 @@
  * Core Tables:
  * - students: Student profiles with extended fields (phone, address, college, course, etc.)
  * - admins: Admin authentication with bcrypt password hashing
- * - institutes: Institute/university management
- * - tests: Test templates with scheduling, duration, and passing criteria
+ * - institutes: Institute/university management with registration control
+ * - tests: Test templates with scheduling, duration, passing criteria, and audit fields
  * - test_job_roles: Multiple job roles per test with descriptions
  * - questions: MCQ questions with 4 options and correct answers
  * - exams: Exam instances (legacy support)
@@ -22,11 +22,21 @@
  * - student_responses: Individual question responses with correctness tracking
  * - test_attempts: Complete test submission records with scores
  * - test_assignments: Test-to-student assignment mapping
+ * - institute_test_assignments: Test-to-institute assignment mapping
  * - exam_progress: Auto-save functionality with progress tracking
+ * - test_feedback: Student feedback on tests with ratings, difficulty, and comments
+ * 
+ * Coding Features:
+ * - coding_questions: Coding problems with time/memory limits
+ * - coding_test_cases: Test cases for coding questions (public and hidden)
+ * - student_coding_submissions: Student code submissions with execution results
  * 
  * Proctoring Features:
  * - proctoring_sessions: Live proctoring session tracking
  * - proctoring_violations: AI-detected cheating violations
+ * 
+ * System Features:
+ * - system_settings: System-wide settings (maintenance mode, retry timer)
  * 
  * Performance Optimizations:
  * - Comprehensive indexes for all foreign keys
@@ -37,6 +47,7 @@
  * Seed Data:
  * - Default admin account (admin@example.com / admin123)
  * - Default institutes (Not Specified, Other)
+ * - Default system settings (retry timer: 5 minutes, maintenance mode: off)
  * 
  * PREREQUISITES:
  * ==============
@@ -62,7 +73,7 @@
  * It's safe to run multiple times (uses IF NOT EXISTS checks).
  * 
  * @author MCQ Exam Portal Team
- * @version 2.0.0
+ * @version 4.0.0
  */
 
 const { Pool } = require('pg');
@@ -91,12 +102,26 @@ const createTables = async () => {
                 display_name VARCHAR(255) NOT NULL,
                 created_by VARCHAR(255) DEFAULT 'admin',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT true
+                is_active BOOLEAN DEFAULT true,
+                registration_deadline TIMESTAMPTZ,
+                registration_status VARCHAR(20) DEFAULT 'open',
+                registration_start_time TIMESTAMPTZ
             );
         `);
 
-        // Index for institutes
+        // Add check constraint for registration_status
+        await client.query(`
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'institutes_registration_status_check') THEN
+                    ALTER TABLE institutes ADD CONSTRAINT institutes_registration_status_check 
+                    CHECK (registration_status IN ('open', 'closed', 'paused'));
+                END IF;
+            END $$;
+        `);
+
+        // Indices for institutes
         await client.query(`CREATE INDEX IF NOT EXISTS idx_institutes_name ON institutes(LOWER(name));`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_institutes_registration_status ON institutes(registration_status);`);
 
         // 2. Create Students Table
         console.log('Creating students table...');
@@ -153,7 +178,10 @@ const createTables = async () => {
                 status VARCHAR(20) DEFAULT 'draft',
                 is_published BOOLEAN DEFAULT false,
                 passing_percentage INTEGER DEFAULT 50,
+                is_mock_test BOOLEAN DEFAULT false,
                 job_role TEXT,
+                created_by VARCHAR(255) DEFAULT 'admin',
+                updated_by VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -166,6 +194,8 @@ const createTables = async () => {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_dates ON tests(start_datetime, end_datetime);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_active ON tests(status, start_datetime, end_datetime) WHERE status = 'published';`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_created_at ON tests(created_at);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_created_by ON tests(created_by);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_tests_updated_by ON tests(updated_by);`);
 
         // 4. Create Test Job Roles Table
         console.log('Creating test_job_roles table...');
@@ -388,8 +418,128 @@ const createTables = async () => {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_test_violations ON proctoring_violations(test_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_violation_timestamp ON proctoring_violations(timestamp);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_severity ON proctoring_violations(severity);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_violations_type ON proctoring_violations(violation_type);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_proctoring_violations_composite ON proctoring_violations(student_id, test_id, violation_type);`);
 
-        // 14. Seed Default Admin
+        // 14. Create Institute Test Assignments Table
+        console.log('Creating institute_test_assignments table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS institute_test_assignments (
+                id SERIAL PRIMARY KEY,
+                institute_id INTEGER REFERENCES institutes(id) ON DELETE CASCADE,
+                test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT true,
+                UNIQUE(institute_id, test_id)
+            );
+        `);
+
+        // Create indices for institute_test_assignments
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_institute_test_assignments_institute ON institute_test_assignments(institute_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_institute_test_assignments_test ON institute_test_assignments(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_institute_test_assignments_active ON institute_test_assignments(is_active);`);
+
+        // 15. Create Test Feedback Table
+        console.log('Creating test_feedback table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS test_feedback (
+                id SERIAL PRIMARY KEY,
+                student_id VARCHAR(255) NOT NULL,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+                difficulty VARCHAR(20),
+                feedback_text TEXT,
+                submission_reason VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_id, test_id)
+            );
+        `);
+
+        // Create indices for test_feedback
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_feedback_student_id ON test_feedback(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_test_feedback_test_id ON test_feedback(test_id);`);
+
+        // 16. Create System Settings Table
+        console.log('Creating system_settings table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS system_settings (
+                id SERIAL PRIMARY KEY,
+                retry_timer_minutes INTEGER DEFAULT 5,
+                maintenance_mode BOOLEAN DEFAULT false,
+                maintenance_message TEXT DEFAULT 'The system is currently undergoing scheduled maintenance. Please check back later.',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Insert default system settings
+        await client.query(`
+            INSERT INTO system_settings (id, retry_timer_minutes, maintenance_mode)
+            VALUES (1, 5, false)
+            ON CONFLICT (id) DO NOTHING;
+        `);
+
+        // 17. Create Coding Questions Table
+        console.log('Creating coding_questions table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS coding_questions (
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                title VARCHAR(500) NOT NULL,
+                description TEXT NOT NULL,
+                time_limit DECIMAL(5,2) DEFAULT 2.0,
+                memory_limit INTEGER DEFAULT 256,
+                question_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Create index for coding_questions
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_coding_questions_test_id ON coding_questions(test_id);`);
+
+        // 18. Create Coding Test Cases Table
+        console.log('Creating coding_test_cases table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS coding_test_cases (
+                id SERIAL PRIMARY KEY,
+                coding_question_id INTEGER NOT NULL REFERENCES coding_questions(id) ON DELETE CASCADE,
+                input TEXT NOT NULL,
+                output TEXT NOT NULL,
+                explanation TEXT,
+                is_hidden BOOLEAN DEFAULT FALSE,
+                test_case_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Create indices for coding_test_cases
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_coding_test_cases_question_id ON coding_test_cases(coding_question_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_coding_test_cases_is_hidden ON coding_test_cases(is_hidden);`);
+
+        // 19. Create Student Coding Submissions Table
+        console.log('Creating student_coding_submissions table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS student_coding_submissions (
+                id SERIAL PRIMARY KEY,
+                student_id VARCHAR(50) NOT NULL,
+                coding_question_id INTEGER NOT NULL REFERENCES coding_questions(id) ON DELETE CASCADE,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                code TEXT,
+                language VARCHAR(50),
+                status VARCHAR(50) DEFAULT 'pending',
+                test_cases_passed INTEGER DEFAULT 0,
+                total_test_cases INTEGER DEFAULT 0,
+                submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_id, coding_question_id, test_id)
+            );
+        `);
+
+        // Create indices for student_coding_submissions
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_coding_submissions_student ON student_coding_submissions(student_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_coding_submissions_test ON student_coding_submissions(test_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_student_coding_submissions_question ON student_coding_submissions(coding_question_id);`);
+
+        // 20. Seed Default Admin
         const defaultAdminEmail = 'admin@example.com';
         const defaultAdminPassword = 'admin123';
         const defaultAdminName = 'System Admin';
@@ -410,7 +560,7 @@ const createTables = async () => {
             console.log('ℹ️ Default admin already exists.');
         }
 
-        // 15. Seed Default Institutes
+        // 21. Seed Default Institutes
         console.log('Seeding default institutes...');
         const defaultInstitutes = [
             { name: 'not specified', display_name: 'Not Specified' },
@@ -425,13 +575,15 @@ const createTables = async () => {
             `, [institute.name, institute.display_name]);
         }
 
-        // 15. Run ANALYZE for query planner optimization
+        // 22. Run ANALYZE for query planner optimization
         console.log('Analyzing tables for query optimization...');
         const tables = [
             'students', 'admins', 'tests', 'test_job_roles', 'questions', 
             'exams', 'results', 'student_responses', 'test_attempts', 
             'test_assignments', 'exam_progress', 'proctoring_sessions', 
-            'proctoring_violations', 'institutes'
+            'proctoring_violations', 'institutes', 'institute_test_assignments',
+            'test_feedback', 'system_settings', 'coding_questions', 'coding_test_cases',
+            'student_coding_submissions'
         ];
         
         for (const table of tables) {
@@ -441,13 +593,17 @@ const createTables = async () => {
         console.log('✅ Database setup completed successfully!');
         console.log('📊 Database includes:');
         console.log('   - Students table with profile fields (phone, address, college, course, specialization)');
-        console.log('   - Institutes table with default institutes');
-        console.log('   - Tests table with job roles, scheduling, and passing percentage');
+        console.log('   - Institutes table with registration control (deadline, status, start time)');
+        console.log('   - Tests table with job roles, scheduling, passing percentage, and audit fields');
         console.log('   - Test job roles table for multiple job roles per test');
         console.log('   - Questions and exam management');
         console.log('   - Test assignments for student-test mapping');
+        console.log('   - Institute test assignments for institute-test mapping');
         console.log('   - Progress tracking with auto-save functionality');
         console.log('   - Proctoring sessions and violations tracking');
+        console.log('   - Feedback system for student test feedback (test_feedback table)');
+        console.log('   - System settings for maintenance mode and retry timer');
+        console.log('   - Coding questions with test cases and submissions');
         console.log('   - Performance indexes for 300+ concurrent users');
         console.log('   - Default admin account (admin@example.com / admin123)');
 

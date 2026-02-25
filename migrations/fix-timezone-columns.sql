@@ -19,9 +19,3 @@ USING start_datetime AT TIME ZONE 'Asia/Kolkata';
 ALTER TABLE tests
 ALTER COLUMN end_datetime TYPE TIMESTAMPTZ
 USING end_datetime AT TIME ZONE 'Asia/Kolkata';
-
--- Verify the conversion
-SELECT id, title, start_datetime, end_datetime
-FROM tests 
-WHERE start_datetime IS NOT NULL
-LIMIT 5;
