@@ -347,41 +347,49 @@ router.get('/test/:testId', verifyToken, async (req, res) => {
             };
         });
 
+        // CODE EXECUTION FEATURE - TEMPORARILY DISABLED
         // Fetch coding questions for this test
-        const codingQuestionsResult = await pool.query(
-            `SELECT id, title, description, time_limit, memory_limit, marks 
-             FROM coding_questions 
-             WHERE test_id = $1 
-             ORDER BY question_order ASC, id ASC`,
-            [testId]
-        );
+        let codingQuestions = [];
+        try {
+            const codingQuestionsResult = await pool.query(
+                `SELECT id, title, description, time_limit, memory_limit, marks 
+                 FROM coding_questions 
+                 WHERE test_id = $1 
+                 ORDER BY question_order ASC, id ASC`,
+                [testId]
+            );
 
-        console.log(`[Student Test] Found ${codingQuestionsResult.rows.length} coding questions for test ${testId}`);
+            console.log(`[Student Test] Found ${codingQuestionsResult.rows.length} coding questions for test ${testId}`);
 
-        // Get public test cases for each coding question
-        const codingQuestions = await Promise.all(
-            codingQuestionsResult.rows.map(async (question) => {
-                const testCasesResult = await pool.query(
-                    `SELECT input, output, explanation 
-                     FROM coding_test_cases 
-                     WHERE coding_question_id = $1 AND is_hidden = false
-                     ORDER BY test_case_order ASC, id ASC`,
-                    [question.id]
-                );
+            // Get public test cases for each coding question
+            codingQuestions = await Promise.all(
+                codingQuestionsResult.rows.map(async (question) => {
+                    const testCasesResult = await pool.query(
+                        `SELECT input, output, explanation 
+                         FROM coding_test_cases 
+                         WHERE coding_question_id = $1 AND is_hidden = false
+                         ORDER BY test_case_order ASC, id ASC`,
+                        [question.id]
+                    );
 
-                return {
-                    id: question.id,
-                    title: question.title,
-                    description: question.description,
-                    timeLimit: parseFloat(question.time_limit),
-                    memoryLimit: question.memory_limit,
-                    marks: question.marks || 10,
-                    testCases: testCasesResult.rows
-                };
-            })
-        );
+                    return {
+                        id: question.id,
+                        title: question.title,
+                        description: question.description,
+                        timeLimit: parseFloat(question.time_limit),
+                        memoryLimit: question.memory_limit,
+                        marks: question.marks || 10,
+                        testCases: testCasesResult.rows
+                    };
+                })
+            );
 
-        console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
+            console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
+        } catch (codingError) {
+            console.error('[Student Test] Error fetching coding questions (table may not exist):', codingError.message);
+            // Continue without coding questions if table doesn't exist
+            codingQuestions = [];
+        }
 
         // 3. Check for saved progress
         const progressResult = await pool.query(`
@@ -661,6 +669,7 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
             });
         });
 
+        // CODE EXECUTION FEATURE - TEMPORARILY DISABLED
         // 3.5. Add marks from coding questions
         try {
             // Get all coding questions for this test
@@ -691,7 +700,7 @@ router.post('/submit-exam', verifyToken, async (req, res) => {
             console.log('Coding questions total marks:', codingQuestionsResult.rows.reduce((sum, cq) => sum + (cq.marks || 10), 0));
             console.log('Coding questions marks obtained:', codingSubmissionsResult.rows.reduce((sum, s) => sum + parseFloat(s.marks_earned || 0), 0));
         } catch (codingError) {
-            console.error('Error calculating coding question marks:', codingError);
+            console.error('Error calculating coding question marks (table may not exist):', codingError.message);
             // Continue with MCQ marks only if coding marks calculation fails
         }
 
