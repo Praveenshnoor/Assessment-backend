@@ -5,8 +5,15 @@ require('dotenv').config();
 // Check if Firebase is already initialized
 if (!admin.apps.length) {
     try {
+        // Check if we have valid Firebase credentials
+        const hasValidEnvCredentials = process.env.FIREBASE_PROJECT_ID && 
+                                     process.env.FIREBASE_CLIENT_EMAIL && 
+                                     process.env.FIREBASE_PRIVATE_KEY &&
+                                     process.env.FIREBASE_CLIENT_EMAIL !== 'firebase-adminsdk-xxxxx@shnoor-portal.iam.gserviceaccount.com' &&
+                                     process.env.FIREBASE_PRIVATE_KEY !== '"-----BEGIN PRIVATE KEY-----\nYour_Private_Key_Here\n-----END PRIVATE KEY-----\n"';
+
         // Option 1: Use environment variables (recommended for Render)
-        if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+        if (hasValidEnvCredentials) {
             admin.initializeApp({
                 credential: admin.credential.cert({
                     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -20,20 +27,50 @@ if (!admin.apps.length) {
         else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
             const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './serviceAccountKey.json';
             const absolutePath = path.resolve(__dirname, '..', serviceAccountPath);
-            const serviceAccount = require(absolutePath);
-
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount),
-            });
-            console.log('✅ Firebase Admin SDK initialized with service account file');
+            
+            // Check if file exists
+            const fs = require('fs');
+            if (fs.existsSync(absolutePath)) {
+                const serviceAccount = require(absolutePath);
+                admin.initializeApp({
+                    credential: admin.credential.cert(serviceAccount),
+                });
+                console.log('✅ Firebase Admin SDK initialized with service account file');
+            } else {
+                throw new Error('Service account file not found');
+            }
         }
         else {
-            throw new Error('Firebase credentials not found. Please set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY environment variables, or provide FIREBASE_SERVICE_ACCOUNT_PATH.');
+            // Graceful fallback - warn but don't crash the server
+            console.warn('⚠️  Firebase credentials not configured properly');
+            console.warn('   Authentication features will be limited');
+            console.warn('   Please configure Firebase credentials in .env file or add serviceAccountKey.json');
+            console.warn('   Server will continue to run for testing purposes...');
+            
+            // Initialize with minimal configuration to prevent crashes
+            module.exports = {
+                auth: () => ({
+                    verifyIdToken: () => Promise.reject(new Error('Firebase not configured')),
+                    createUser: () => Promise.reject(new Error('Firebase not configured')),
+                    getUserByEmail: () => Promise.reject(new Error('Firebase not configured'))
+                })
+            };
+            return;
         }
     } catch (error) {
-        console.error('❌ Error initializing Firebase Admin SDK:', error.message);
-        console.error('Please ensure Firebase credentials are properly configured');
-        process.exit(1);
+        console.warn('⚠️  Firebase initialization failed:', error.message);
+        console.warn('   Authentication features will be limited');
+        console.warn('   Server will continue to run for testing purposes...');
+        
+        // Initialize with minimal configuration to prevent crashes
+        module.exports = {
+            auth: () => ({
+                verifyIdToken: () => Promise.reject(new Error('Firebase not configured')),
+                createUser: () => Promise.reject(new Error('Firebase not configured')),
+                getUserByEmail: () => Promise.reject(new Error('Firebase not configured'))
+            })
+        };
+        return;
     }
 }
 
