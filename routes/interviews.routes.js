@@ -94,8 +94,11 @@ router.post('/schedule', verifyAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
+    // Convert scheduled_time to Asia/Kolkata timezone if it's not already
+    // The frontend sends datetime-local which is in local timezone
+    // We need to ensure it's stored as TIMESTAMP (which will be treated as Asia/Kolkata by db.js SET timezone)
     const result = await db.pool.query(
-      'INSERT INTO interviews (student_id, test_id, scheduled_time, duration) VALUES ($1, $2, $3, $4) RETURNING id',
+      'INSERT INTO interviews (student_id, test_id, scheduled_time, duration) VALUES ($1, $2, $3::timestamp, $4) RETURNING id',
       [resolvedStudentId, test_id, scheduled_time, duration || 60]
     );
 

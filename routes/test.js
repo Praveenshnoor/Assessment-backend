@@ -180,7 +180,9 @@ router.get('/:id', verifyAdmin, async (req, res) => {
                 t.end_datetime,
                 t.created_by,
                 t.updated_by,
-                t.updated_at
+                t.updated_at,
+                t.is_published,
+                t.is_mock_test
             FROM tests t
             WHERE t.id = $1
         `, [id]);
