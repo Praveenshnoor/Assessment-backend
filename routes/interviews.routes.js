@@ -255,6 +255,28 @@ router.post('/:id/end', verifyAdmin, async (req, res) => {
   }
 });
 
+// Delete interview (Admin only)
+router.delete('/:id', verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if interview exists
+    const checkResult = await db.pool.query('SELECT id, status FROM interviews WHERE id = $1', [id]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Interview not found' });
+    }
+
+    // Delete the interview
+    await db.pool.query('DELETE FROM interviews WHERE id = $1', [id]);
+
+    res.json({ success: true, message: 'Interview deleted successfully' });
+  } catch (error) {
+    console.error('Delete interview error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete interview' });
+  }
+});
+
 // Get interview details
 router.get('/:id', verifyAnyUser, async (req, res) => {
   try {
