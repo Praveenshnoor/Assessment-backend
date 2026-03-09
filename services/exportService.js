@@ -128,7 +128,9 @@ async function exportExamResults(filters = {}) {
     // parse student IDs if they're provided
     let parsedFilters = { ...filters };
     if (filters.studentIds) {
+      console.log('Parsing studentIds:', filters.studentIds, 'type:', typeof filters.studentIds);
       parsedFilters.studentIds = parseStudentIds(filters.studentIds);
+      console.log('Parsed studentIds result:', parsedFilters.studentIds);
       if (!parsedFilters.studentIds) {
         const error = new Error('Invalid student IDs format');
         error.statusCode = 400;

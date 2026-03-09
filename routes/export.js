@@ -3,6 +3,10 @@ const router = express.Router();
 const { pool } = require('../config/db');
 const { exportExamResults } = require('../services/exportService');
 const verifyAdmin = require('../middleware/verifyAdmin');
+const PDFDocument = require('pdfkit');
+require('pdfkit-table');
+const fs = require('fs');
+const path = require('path');
 
 // Get all results as JSON - admin only (shows only highest score per student per test)
 router.get('/all-results', verifyAdmin, async (req, res) => {
@@ -21,6 +25,7 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
           s.roll_number,
           s.email as student_email,
           s.id as student_id,
+          COALESCE(i.display_name, s.institute, 'Not Specified') as institute_name,
           t.id as test_id,
           t.duration,
           t.max_attempts,
@@ -41,10 +46,11 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
         FROM results r
         INNER JOIN exams e ON r.exam_id = e.id
         INNER JOIN students s ON r.student_id = s.id
+        LEFT JOIN institutes i ON LOWER(s.institute) = i.name
         LEFT JOIN tests t ON t.title = e.name
-        LEFT JOIN proctoring_violations pv ON pv.student_id = s.id::text AND pv.test_id = t.id
+        LEFT JOIN proctoring_violations pv ON pv.student_id = s.id AND pv.test_id = t.id
         WHERE t.id IS NOT NULL
-        GROUP BY r.id, r.marks_obtained, r.total_marks, r.created_at, e.name, e.date, s.full_name, s.roll_number, s.email, s.id, t.id, t.duration, t.max_attempts, t.passing_percentage, t.start_datetime, t.end_datetime
+        GROUP BY r.id, r.marks_obtained, r.total_marks, r.created_at, e.name, e.date, s.full_name, s.roll_number, s.email, s.id, i.display_name, s.institute, t.id, t.duration, t.max_attempts, t.passing_percentage, t.start_datetime, t.end_datetime
       )
       SELECT 
         id,
@@ -58,6 +64,7 @@ router.get('/all-results', verifyAdmin, async (req, res) => {
         roll_number,
         student_email,
         student_id,
+        institute_name,
         test_id,
         duration,
         max_attempts,
@@ -94,7 +101,7 @@ router.get('/results', verifyAdmin, async (req, res) => {
   console.log('=== EXPORT ROUTE HIT ===');
   console.log('Query params:', req.query);
   console.log('Headers:', req.headers.authorization);
-  
+
   try {
     const { examId, testId, startDate, endDate, studentIds } = req.query;
     console.log('Parsed examId:', examId, 'testId:', testId);
@@ -107,21 +114,21 @@ router.get('/results', verifyAdmin, async (req, res) => {
       if (isNaN(parsedTestId)) {
         return res.status(400).json({ error: 'Invalid test ID format' });
       }
-      
+
       // Get the test name
       const testResult = await pool.query('SELECT title FROM tests WHERE id = $1', [parsedTestId]);
       if (testResult.rows.length === 0) {
         return res.status(404).json({ error: 'Test not found' });
       }
-      
+
       const testName = testResult.rows[0].title;
-      
+
       // Find ALL matching exams by name
       const examResult = await pool.query('SELECT id FROM exams WHERE name = $1', [testName]);
       if (examResult.rows.length === 0) {
         return res.status(404).json({ error: 'No results found for this exam. Please ensure students have completed the exam before exporting.' });
       }
-      
+
       // Use ALL matching exam IDs
       filters.examIds = examResult.rows.map(row => row.id);
       console.log('Found matching exam IDs:', filters.examIds, 'for test:', testName);
@@ -165,7 +172,7 @@ router.get('/results', verifyAdmin, async (req, res) => {
     console.error('Error:', error);
     console.error('Status code:', error.statusCode);
     console.error('Message:', error.message);
-    
+
     const statusCode = error.statusCode || 500;
     const message = error.message || 'Internal server error';
 
@@ -180,7 +187,7 @@ router.get('/results', verifyAdmin, async (req, res) => {
 router.get('/institutes', verifyAdmin, async (req, res) => {
   try {
     console.log('=== FETCHING INSTITUTES FOR EXPORT ===');
-    
+
     // Get institutes from the institutes table (same as dashboard uses)
     // This ensures the dropdown shows the same names that are stored
     const result = await pool.query(
@@ -189,7 +196,7 @@ router.get('/institutes', verifyAdmin, async (req, res) => {
        WHERE is_active = true
        ORDER BY display_name`
     );
-    
+
     const institutes = result.rows.map(row => row.institute_name);
     console.log('Found institutes:', institutes);
     res.json({ success: true, institutes });
@@ -228,15 +235,15 @@ router.get('/students', verifyAdmin, async (req, res) => {
       // Split by pipe (|) instead of comma to handle institute names with commas
       const instituteList = institutes.split('|').map(c => c.trim());
       console.log('Institute list after split:', instituteList);
-      
+
       if (instituteList.length > 0) {
         // Handle "Not Specified" case
         const hasNotSpecified = instituteList.includes('Not Specified');
         const otherInstitutes = instituteList.filter(c => c !== 'Not Specified');
-        
+
         console.log('Has Not Specified:', hasNotSpecified);
         console.log('Other institutes:', otherInstitutes);
-        
+
         if (hasNotSpecified && otherInstitutes.length > 0) {
           // Match against display_name from institutes table
           queryText += ` WHERE (i.display_name = ANY($1) OR s.institute IS NULL OR s.institute = '')`;
@@ -252,15 +259,15 @@ router.get('/students', verifyAdmin, async (req, res) => {
     }
 
     queryText += ` ORDER BY institute_name, s.full_name`;
-    
+
     console.log('Final query:', queryText);
     console.log('Query params:', queryParams);
-    
+
     const result = await pool.query(queryText, queryParams);
     const students = result.rows;
 
     console.log(`Found ${students.length} students`);
-    
+
     if (students.length > 0) {
       console.log('Sample student institutes:', students.slice(0, 3).map(s => s.institute_name));
     }
@@ -268,9 +275,9 @@ router.get('/students', verifyAdmin, async (req, res) => {
     // Check if no students found
     if (students.length === 0) {
       console.log('No students found - returning 404');
-      return res.status(404).json({ 
-        success: false, 
-        message: 'No students found for the selected institute(s)' 
+      return res.status(404).json({
+        success: false,
+        message: 'No students found for the selected institute(s)'
       });
     }
 
@@ -351,7 +358,7 @@ router.get('/students', verifyAdmin, async (req, res) => {
 
     await workbook.xlsx.write(res);
     res.end();
-    
+
     console.log('Excel file sent successfully');
   } catch (error) {
     console.error('=== STUDENT EXPORT ERROR ===');
@@ -360,5 +367,299 @@ router.get('/students', verifyAdmin, async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to export students', error: error.message });
   }
 });
+
+// PDF Export endpoint for shortlisted candidates
+router.post('/shortlisted-pdf', verifyAdmin, async (req, res) => {
+  try {
+    const { examName, collegeName, students } = req.body;
+
+    console.log('=== PDF EXPORT REQUEST ===');
+    console.log('Exam Name:', examName);
+    console.log('College Name:', collegeName);
+    console.log('Students Count:', students?.length);
+
+    // Validate request body
+    if (!students || !Array.isArray(students) || students.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No students provided for PDF export'
+      });
+    }
+
+    // Set response headers for PDF
+    const sanitizedExamName = (examName || 'Assessment_Report').replace(/[^a-zA-Z0-9]/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${sanitizedExamName}.pdf"`);
+
+    // Initialize PDF document in landscape mode for more columns
+    const doc = new PDFDocument({ 
+      margin: 30, 
+      size: 'A4',
+      layout: 'landscape',
+      bufferPages: true,
+      autoFirstPage: true
+    });
+    doc.pipe(res);
+
+    // Document Information
+    doc.info['Title'] = examName || 'Assessment Report';
+    doc.info['Author'] = 'SHNOOR Management System';
+
+    // 1. Logo Insertion - Positioned neatly top left
+    const logoPath = path.resolve(__dirname, '../assets/shnoor-logo1.png');
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 30, 15, { width: 100 });
+    }
+
+    // 2. Header Content - Right Aligned
+    doc.y = 30;
+    const rightColumnX = 30;
+    const rightAlign = { align: 'right', width: doc.page.width - 60, lineBreak: false };
+
+    // Get exam date from first student's date (all students should have same exam date)
+    const examDate = students && students.length > 0 && students[0].date 
+      ? students[0].date 
+      : new Date().toLocaleDateString('en-IN');
+
+    doc.font('Helvetica-Bold')
+      .fontSize(16)
+      .fillColor('#111827')
+      .text('ASSESSMENTS REPORT', rightColumnX, doc.y, rightAlign);
+
+    doc.moveDown(0.3);
+    doc.font('Helvetica')
+      .fontSize(10)
+      .fillColor('#4B5563')
+      .text(`Exam Date: ${examDate}`, rightColumnX, doc.y, { ...rightAlign, continued: false });
+
+    doc.moveDown(0.2);
+    const displayInstitute = collegeName || 'All Institutes';
+    doc.fontSize(9)
+      .fillColor('#6B7280')
+      .text(`Institute: ${displayInstitute}`, rightColumnX, doc.y, rightAlign);
+
+    doc.moveDown(0.2);
+    doc.text(`Generated on: ${new Date().toLocaleDateString('en-IN')}`, rightColumnX, doc.y, rightAlign);
+
+    // 3. Horizontal Rule
+    doc.moveDown(1.5);
+    const lineY = doc.y;
+    doc.strokeColor('#E5E7EB')
+      .lineWidth(1)
+      .moveTo(30, lineY)
+      .lineTo(doc.page.width - 30, lineY)
+      .stroke();
+    doc.moveDown(1.5);
+
+    console.log('Students data received:', JSON.stringify(students, null, 2));
+
+    // 4. Table Setup - All columns like Excel
+    let tableTop = doc.y;
+    const tableHeaders = ['ID', 'Name', 'Email', 'Date', 'Obtained', 'Total', '%', 'Status', 'No Face', 'Multi', 'Phone', 'Noise', 'Voice', 'Total Viol', 'Flagged', 'Shortlisted'];
+    // Adjust widths to fit A4 Landscape (842 pts wide: margins 30+30 = 60, usable = 782)
+    // Optimized to use full width: Total = 782 points (removed 65pt unused space)
+    const colWidths = [38, 84, 128, 54, 42, 37, 37, 40, 37, 34, 37, 37, 37, 40, 42, 58];
+    const rowHeight = 22;
+    let tableX = 30;
+    let currentY = tableTop;
+
+    // Draw Table Header Background (Light gray, not solid blue)
+    doc.rect(tableX, currentY, colWidths.reduce((a, b) => a + b, 0), rowHeight)
+      .fill('#F3F4F6');
+
+    // Draw Header Text
+    doc.font('Helvetica-Bold')
+      .fontSize(7)
+      .fillColor('#374151');
+
+    tableHeaders.forEach((header, i) => {
+      const x = tableX + colWidths.slice(0, i).reduce((a, b) => a + b, 0);
+      doc.text(header, x + 3, currentY + 7, {
+        width: colWidths[i] - 6,
+        align: i >= 4 ? 'center' : 'left',
+        lineBreak: false
+      });
+    });
+
+    currentY += rowHeight;
+
+    // Header Bottom Border
+    doc.strokeColor('#D1D5DB')
+      .lineWidth(1)
+      .moveTo(tableX, currentY)
+      .lineTo(tableX + colWidths.reduce((a, b) => a + b, 0), currentY)
+      .stroke();
+
+    // Draw table rows
+    doc.font('Helvetica')
+      .fontSize(7)
+      .fillColor('#1F2937');
+
+    // Industry Standard: Calculate safe page break threshold
+    // A4 Landscape height = 595pt, bottom margin + footer = 80pt, safe threshold = 510pt
+    const pageBreakThreshold = 510;
+
+    students.forEach((student, idx) => {
+      const rowData = [
+        String(student.student_id || student.roll_number || student.id || 'N/A'),
+        String(student.full_name || student.student_name || student.name || 'N/A'),
+        String(student.email || 'N/A'),
+        String(student.date || 'N/A'),
+        String(student.marks_obtained || '0'),
+        String(student.total_marks || '0'),
+        String(student.percentage || '0'),
+        String(student.status || 'N/A'),
+        String(student.no_face || '0'),
+        String(student.multiple_faces || '0'),
+        String(student.phone_detected || '0'),
+        String(student.loud_noise || '0'),
+        String(student.voice_detected || '0'),
+        String(student.total_violations || '0'),
+        String(student.flagged || 'No'),
+        String(student.shortlisted || 'No')
+      ];
+
+      // Industry Standard: Only break page if NEXT row won't fit AND there are more students
+      // This prevents unnecessary blank pages for small datasets
+      const willNextRowFit = (currentY + rowHeight) <= pageBreakThreshold;
+      const isNotLastStudent = idx < students.length - 1;
+      
+      if (!willNextRowFit && isNotLastStudent) {
+        // Draw Outer Table Border for current page before breaking
+        doc.strokeColor('#D1D5DB')
+          .lineWidth(1)
+          .rect(tableX, tableTop, colWidths.reduce((a, b) => a + b, 0), currentY - tableTop)
+          .stroke();
+
+        // Add new page without footer (prevents extra blank pages)
+        doc.addPage();
+
+        // Reset position for new page
+        currentY = 50;
+        tableTop = currentY;
+
+        // Re-draw table header on new page
+        doc.rect(tableX, currentY, colWidths.reduce((a, b) => a + b, 0), rowHeight)
+          .fill('#F3F4F6');
+        doc.font('Helvetica-Bold').fontSize(7).fillColor('#374151');
+
+        tableHeaders.forEach((header, i) => {
+          const x = tableX + colWidths.slice(0, i).reduce((a, b) => a + b, 0);
+          doc.text(header, x + 3, currentY + 7, {
+            width: colWidths[i] - 6,
+            align: i >= 4 ? 'center' : 'left',
+            lineBreak: false
+          });
+        });
+
+        currentY += rowHeight;
+        doc.strokeColor('#D1D5DB').lineWidth(1).moveTo(tableX, currentY).lineTo(tableX + colWidths.reduce((a, b) => a + b, 0), currentY).stroke();
+      }
+
+      // Draw row background (zebra striping)
+      if (idx % 2 !== 0) {
+        doc.rect(tableX, currentY, colWidths.reduce((a, b) => a + b, 0), rowHeight)
+          .fill('#F9FAFB');
+      }
+
+      // Draw row bottom border
+      doc.strokeColor('#E5E7EB')
+        .lineWidth(0.5)
+        .moveTo(tableX, currentY + rowHeight)
+        .lineTo(tableX + colWidths.reduce((a, b) => a + b, 0), currentY + rowHeight)
+        .stroke();
+
+      // Draw row text
+      rowData.forEach((data, i) => {
+        const x = tableX + colWidths.slice(0, i).reduce((a, b) => a + b, 0);
+
+        // Apply semantic colors for special columns
+        if (i === 7) { // Status column
+          doc.font('Helvetica-Bold');
+          doc.fillColor(data.toLowerCase() === 'pass' ? '#059669' : '#DC2626');
+        } else if (i === 14) { // Flagged column
+          doc.font('Helvetica-Bold');
+          doc.fillColor(data.toLowerCase() === 'yes' ? '#DC2626' : '#6B7280');
+        } else if (i === 15) { // Shortlisted column
+          doc.font('Helvetica-Bold');
+          doc.fillColor(data.toLowerCase() === 'yes' ? '#059669' : '#6B7280');
+        } else {
+          doc.font('Helvetica');
+          doc.fillColor('#1F2937');
+        }
+
+        doc.text(data, x + 3, currentY + 7, {
+          width: colWidths[i] - 6,
+          align: i >= 4 ? 'center' : 'left',
+          lineBreak: false
+        });
+      });
+
+      currentY += rowHeight;
+    });
+
+    // Draw Outer Table Border
+    doc.strokeColor('#D1D5DB')
+      .lineWidth(1)
+      .rect(tableX, tableTop, colWidths.reduce((a, b) => a + b, 0), currentY - tableTop)
+      .stroke();
+
+    // Add Vertical Lines for better visual separation
+    let xPos = tableX;
+    doc.lineWidth(0.5).strokeColor('#E5E7EB');
+    for (let i = 1; i < colWidths.length; i++) {
+      xPos += colWidths[i-1];
+      doc.moveTo(xPos, tableTop).lineTo(xPos, currentY).stroke();
+    }
+
+    // Footer removed to prevent auto-pagination issues
+    // Industry standard: Small datasets don't need footers
+
+    doc.end();
+
+    console.log('PDF generated successfully with', students.length, 'students');
+  } catch (error) {
+    console.error('=== PDF EXPORT ERROR ===');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
+
+    // If headers haven't been sent yet, send error response
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to generate PDF',
+        error: error.message
+      });
+    }
+  }
+});
+
+// Helper function to add footer securely
+function addPageFooter(doc, examName) {
+  const footerY = doc.page.height - 40;
+
+  // Footer Line
+  doc.strokeColor('#E5E7EB')
+    .lineWidth(1)
+    .moveTo(40, footerY - 10)
+    .lineTo(doc.page.width - 40, footerY - 10)
+    .stroke();
+
+  // Footer text with lineBreak:false to prevent auto-pagination
+  doc.font('Helvetica')
+    .fontSize(8)
+    .fillColor('#9CA3AF');
+
+  doc.text('SHNOOR Management System - Strictly Confidential', 40, footerY, {
+    lineBreak: false,
+    width: 300
+  });
+
+  doc.text('Page', doc.page.width - 100, footerY, {
+    align: 'right',
+    lineBreak: false,
+    width: 60
+  });
+}
 
 module.exports = router;

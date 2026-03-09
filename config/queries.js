@@ -17,7 +17,7 @@ async function executeQuery(query, params = []) {
 // build the sql query based on what filters we got
 function buildQuery(filters = {}) {
   const { examId, examIds, startDate, endDate, studentIds } = filters;
-  
+
   // start with CTE to rank results and get only highest score per student per exam
   let query = `
     WITH ranked_results AS (
@@ -55,13 +55,13 @@ function buildQuery(filters = {}) {
       INNER JOIN students s ON r.student_id = s.id
       INNER JOIN exams e ON r.exam_id = e.id
       LEFT JOIN tests t ON t.title = e.name
-      LEFT JOIN proctoring_violations pv ON pv.student_id = s.id::text AND pv.test_id = t.id
+      LEFT JOIN proctoring_violations pv ON pv.student_id = s.id AND pv.test_id = t.id
       WHERE 1=1 AND t.id IS NOT NULL
   `;
-  
+
   const params = [];
   let paramIndex = 1;
-  
+
   // filter by multiple exam IDs if specified (for tests with multiple exam records)
   if (examIds && Array.isArray(examIds) && examIds.length > 0) {
     const placeholders = examIds.map((_, index) => `$${paramIndex + index}`).join(', ');
@@ -75,20 +75,20 @@ function buildQuery(filters = {}) {
     params.push(examId);
     paramIndex++;
   }
-  
+
   // filter by date range if provided
   if (startDate) {
     query += ` AND e.date >= $${paramIndex}`;
     params.push(startDate);
     paramIndex++;
   }
-  
+
   if (endDate) {
     query += ` AND e.date <= $${paramIndex}`;
     params.push(endDate);
     paramIndex++;
   }
-  
+
   // filter by specific students if needed
   if (studentIds && Array.isArray(studentIds) && studentIds.length > 0) {
     const placeholders = studentIds.map((_, index) => `$${paramIndex + index}`).join(', ');
@@ -96,7 +96,7 @@ function buildQuery(filters = {}) {
     params.push(...studentIds);
     paramIndex += studentIds.length;
   }
-  
+
   // close the CTE and select only rank 1 (highest score per student per exam)
   query += `
       GROUP BY s.id, s.full_name, s.email, s.resume_link, e.id, e.name, e.date,
@@ -126,7 +126,7 @@ function buildQuery(filters = {}) {
     WHERE rank = 1
     ORDER BY exam_date DESC, student_name ASC
   `;
-  
+
   return { query, params };
 }
 
