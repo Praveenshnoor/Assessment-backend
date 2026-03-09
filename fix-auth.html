@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fix Admin Authentication</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+        .error {
+            background: #fee;
+            color: #c33;
+            border-left: 4px solid #c33;
+        }
+        .success {
+            background: #efe;
+            color: #3c3;
+            border-left: 4px solid #3c3;
+        }
+        .warning {
+            background: #ffc;
+            color: #990;
+            border-left: 4px solid #990;
+        }
+        .info {
+            background: #e6f3ff;
+            color: #0066cc;
+            border-left: 4px solid #0066cc;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .step {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-left: 3px solid #667eea;
+        }
+        .code {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+        }
+        #log {
+            background: #1e1e1e;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Admin Authentication Fix</h1>
+        
+        <div class="status info">
+            <strong>Issue:</strong> Your admin token is invalid or expired. This tool will help you fix it.
+        </div>
+
+        <div class="step">
+            <h3>Step 1: Check Current Status</h3>
+            <button onclick="checkStatus()">🔍 Check Authentication Status</button>
+        </div>
+
+        <div class="step">
+            <h3>Step 2: Clear Invalid Token</h3>
+            <button onclick="clearToken()">🗑️ Clear Invalid Token</button>
+        </div>
+
+        <div class="step">
+            <h3>Step 3: Log In Again</h3>
+            <div style="margin: 15px 0;">
+                <label>Email:</label><br>
+                <input type="email" id="email" value="admin@example.com" style="width: 100%; padding: 8px; margin: 5px 0;">
+                
+                <label>Password:</label><br>
+                <input type="password" id="password" placeholder="Enter your admin password" style="width: 100%; padding: 8px; margin: 5px 0;">
+                
+                <button onclick="login()">🔐 Login</button>
+            </div>
+        </div>
+
+        <div class="step">
+            <h3>Step 4: Test Connection</h3>
+            <button onclick="testAPI()">✅ Test API Access</button>
+        </div>
+
+        <div id="log"></div>
+
+        <div class="status warning" style="margin-top: 30px;">
+            <strong>⚠️ Password Reset:</strong> If you don't remember your password, run this command in the backend terminal:<br>
+            <div class="code">node reset-admin-password.js</div>
+            This will reset the password to <code>Admin@123</code>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000';
+        
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const color = {
+                'info': '#4CAF50',
+                'error': '#f44336',
+                'warning': '#ff9800',
+                'success': '#2196F3'
+            }[type];
+            logDiv.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function checkStatus() {
+            log('Checking authentication status...', 'info');
+            const token = localStorage.getItem('adminToken');
+            
+            if (!token) {
+                log('❌ No token found in localStorage', 'error');
+                log('You need to log in', 'warning');
+                return;
+            }
+            
+            log('✓ Token found: ' + token.substring(0, 50) + '...', 'info');
+            
+            // Try to use it
+            fetch(`${API_URL}/api/institutes`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(res => {
+                if (res.status === 401) {
+                    log('❌ Token is INVALID or EXPIRED', 'error');
+                    log('Please clear the token and log in again', 'warning');
+                } else if (res.ok) {
+                    log('✅ Token is VALID!', 'success');
+                    log('Your authentication is working correctly', 'success');
+                } else {
+                    log(`⚠️ Unexpected status: ${res.status}`, 'warning');
+                }
+            })
+            .catch(err => {
+                log('❌ Connection error: ' + err.message, 'error');
+                log('Is the backend server running?', 'warning');
+            });
+        }
+
+        function clearToken() {
+            const token = localStorage.getItem('adminToken');
+            if (!token) {
+                log('ℹ️ No token to clear', 'info');
+                return;
+            }
+            
+            localStorage.removeItem('adminToken');
+            log('✅ Token cleared from localStorage', 'success');
+            log('You can now log in with fresh credentials', 'info');
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            if (!email || !password) {
+                log('❌ Please enter both email and password', 'error');
+                return;
+            }
+            
+            log('🔄 Attempting login...', 'info');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/admin/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    localStorage.setItem('adminToken', data.token);
+                    log('✅ Login successful!', 'success');
+                    log('✓ Token saved to localStorage', 'success');
+                    log('✓ Admin: ' + data.admin.full_name, 'success');
+                    log('You can now return to the admin dashboard', 'info');
+                } else {
+                    log('❌ Login failed: ' + data.message, 'error');
+                    if (data.message.includes('Invalid credentials')) {
+                        log('⚠️ Wrong password. Try resetting it with: node reset-admin-password.js', 'warning');
+                    }
+                }
+            } catch (err) {
+                log('❌ Login error: ' + err.message, 'error');
+                log('Is the backend server running on port 5000?', 'warning');
+            }
+        }
+
+        async function testAPI() {
+            const token = localStorage.getItem('adminToken');
+            
+            if (!token) {
+                log('❌ No token found. Please log in first.', 'error');
+                return;
+            }
+            
+            log('🧪 Testing API endpoints...', 'info');
+            
+            try {
+                // Test institutes endpoint
+                const institutesRes = await fetch(`${API_URL}/api/institutes`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (institutesRes.ok) {
+                    const data = await institutesRes.json();
+                    log('✅ /api/institutes - Working! Found ' + data.institutes.length + ' institutes', 'success');
+                } else {
+                    log('❌ /api/institutes - Failed with status ' + institutesRes.status, 'error');
+                }
+                
+                // Test interviews endpoint
+                const interviewsRes = await fetch(`${API_URL}/api/interviews/list?date=2026-03-09`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (interviewsRes.ok) {
+                    const data = await interviewsRes.json();
+                    log('✅ /api/interviews/list - Working! Found ' + data.interviews.length + ' interviews', 'success');
+                } else {
+                    log('❌ /api/interviews/list - Failed with status ' + interviewsRes.status, 'error');
+                }
+                
+                log('🎉 API test complete!', 'success');
+                
+            } catch (err) {
+                log('❌ API test error: ' + err.message, 'error');
+            }
+        }
+
+        // Auto-check on load
+        window.addEventListener('load', () => {
+            log('🔧 Admin Authentication Fix Tool', 'info');
+            log('Ready to help fix your authentication issues', 'info');
+            setTimeout(checkStatus, 500);
+        });
+    </script>
+</body>
+</html>

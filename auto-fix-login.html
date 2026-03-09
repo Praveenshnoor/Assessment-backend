@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auto-Fix Admin Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 { color: #333; }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid;
+        }
+        .success { background: #d4edda; border-color: #28a745; color: #155724; }
+        .error { background: #f8d7da; border-color: #dc3545; color: #721c24; }
+        .warning { background: #fff3cd; border-color: #ffc107; color: #856404; }
+        .info { background: #d1ecf1; border-color: #17a2b8; color: #0c5460; }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        button:hover { background: #5568d3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .log {
+            background: #1e1e1e;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+        .step { margin: 20px 0; padding: 15px; background: #f9f9f9; border-left: 3px solid #667eea; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Auto-Fix Admin Authentication</h1>
+        
+        <div class="status info">
+            <strong>This tool will automatically:</strong>
+            <ul>
+                <li>Clear your invalid token</li>
+                <li>Log you in with the reset password</li>
+                <li>Redirect you to the admin dashboard</li>
+            </ul>
+        </div>
+
+        <div class="step">
+            <h3>Automatic Login Credentials:</h3>
+            <p><strong>Email:</strong> admin@example.com</p>
+            <p><strong>Password:</strong> Admin@123</p>
+            <button onclick="autoFix()" style="background: #28a745; font-size: 18px;">
+                🚀 Auto-Fix & Login Now
+            </button>
+        </div>
+
+        <div id="log" class="log"></div>
+
+        <div class="status warning" style="margin-top: 30px;">
+            <strong>⚠️ Manual Steps (if auto-fix fails):</strong>
+            <ol>
+                <li>Open browser DevTools (F12)</li>
+                <li>Go to Console tab</li>
+                <li>Type: <code>localStorage.clear(); location.reload();</code></li>
+                <li>Log in manually with credentials above</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000';
+        const FRONTEND_URL = 'http://localhost:5173';
+        
+        function log(message, color = '#0f0') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div style="color: ${color}">[${time}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function autoFix() {
+            log('🔧 Starting auto-fix process...', '#fff');
+            log('');
+            
+            // Step 1: Clear old tokens
+            log('Step 1: Clearing invalid tokens...', '#ff0');
+            const oldToken = localStorage.getItem('adminToken');
+            if (oldToken) {
+                log('  Found old token: ' + oldToken.substring(0, 30) + '...', '#888');
+                localStorage.removeItem('adminToken');
+                log('  ✓ Old token removed', '#0f0');
+            } else {
+                log('  No old token found', '#888');
+            }
+            
+            // Also clear session storage
+            sessionStorage.clear();
+            log('  ✓ Session storage cleared', '#0f0');
+            log('');
+            
+            // Step 2: Login with new credentials
+            log('Step 2: Logging in with new credentials...', '#ff0');
+            log('  Email: admin@example.com', '#888');
+            log('  Password: Admin@123', '#888');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/admin/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email: 'admin@example.com',
+                        password: 'Admin@123'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    log('  ✓ Login successful!', '#0f0');
+                    log('  Admin: ' + data.admin.full_name, '#888');
+                    log('  Token received: ' + data.token.substring(0, 30) + '...', '#888');
+                    log('');
+                    
+                    // Step 3: Save new token
+                    log('Step 3: Saving new token...', '#ff0');
+                    localStorage.setItem('adminToken', data.token);
+                    log('  ✓ Token saved to localStorage', '#0f0');
+                    log('');
+                    
+                    // Step 4: Test API access
+                    log('Step 4: Testing API access...', '#ff0');
+                    
+                    const testResponse = await fetch(`${API_URL}/api/institutes`, {
+                        headers: {
+                            'Authorization': `Bearer ${data.token}`
+                        }
+                    });
+                    
+                    if (testResponse.ok) {
+                        const testData = await testResponse.json();
+                        log('  ✓ API test successful!', '#0f0');
+                        log('  Found ' + testData.institutes.length + ' institutes', '#888');
+                        log('');
+                        
+                        // Success!
+                        log('═══════════════════════════════════════', '#0ff');
+                        log('✅ AUTO-FIX COMPLETE!', '#0f0');
+                        log('═══════════════════════════════════════', '#0ff');
+                        log('');
+                        log('Redirecting to admin dashboard in 3 seconds...', '#fff');
+                        
+                        setTimeout(() => {
+                            window.location.href = `${FRONTEND_URL}/admin/dashboard`;
+                        }, 3000);
+                        
+                    } else {
+                        log('  ⚠ API test failed with status: ' + testResponse.status, '#f00');
+                        log('  But token is saved, try refreshing the dashboard', '#ff0');
+                        log('');
+                        log('Click here to go to dashboard: ' + `${FRONTEND_URL}/admin/dashboard`, '#0ff');
+                    }
+                    
+                } else {
+                    log('  ✗ Login failed: ' + data.message, '#f00');
+                    log('');
+                    log('Please try manual login at: ' + `${FRONTEND_URL}/admin/login`, '#ff0');
+                }
+                
+            } catch (error) {
+                log('  ✗ Error: ' + error.message, '#f00');
+                log('');
+                log('Is the backend server running?', '#ff0');
+                log('Check: ' + API_URL + '/health', '#888');
+            }
+        }
+
+        // Log instructions
+        log('Ready to auto-fix your authentication!', '#0ff');
+        log('Click the "Auto-Fix & Login Now" button to start', '#fff');
+        log('', '');
+    </script>
+</body>
+</html>

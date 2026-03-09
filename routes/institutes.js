@@ -100,10 +100,9 @@ router.get('/', verifyAdmin, async (req, res) => {
                     TRIM(institute_value) as display_name,
                     'auto_migration' as created_by
                 FROM (
-                    SELECT COALESCE(NULLIF(TRIM(s.institute), ''), NULLIF(TRIM(s.college_name), ''), 'Not Specified') as institute_value
+                    SELECT COALESCE(NULLIF(TRIM(s.institute), ''), 'Not Specified') as institute_value
                     FROM students s
-                    WHERE (s.institute IS NOT NULL AND TRIM(s.institute) != '') 
-                       OR (s.college_name IS NOT NULL AND TRIM(s.college_name) != '')
+                    WHERE (s.institute IS NOT NULL AND TRIM(s.institute) != '')
                 ) AS combined_institutes
                 WHERE NOT EXISTS (
                     SELECT 1 FROM institutes i 
@@ -127,7 +126,7 @@ router.get('/', verifyAdmin, async (req, res) => {
         // Update students with missing institute data
         await pool.query(`
             UPDATE students 
-            SET institute = COALESCE(NULLIF(TRIM(institute), ''), NULLIF(TRIM(college_name), ''), 'not specified')
+            SET institute = COALESCE(NULLIF(TRIM(institute), ''), 'not specified')
             WHERE institute IS NULL OR TRIM(institute) = ''
         `);
 
