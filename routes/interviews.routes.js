@@ -94,13 +94,16 @@ router.post('/schedule', verifyAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    // Convert scheduled_time to Asia/Kolkata timezone if it's not already
-    // The frontend sends datetime-local which is in local timezone
-    // We need to ensure it's stored as TIMESTAMP (which will be treated as Asia/Kolkata by db.js SET timezone)
+    // Frontend sends UTC ISO string (converted from IST)
+    // Store it as TIMESTAMPTZ which will preserve the UTC time
+    console.log('Storing scheduled_time (UTC):', scheduled_time);
+    
     const result = await db.pool.query(
-      'INSERT INTO interviews (student_id, test_id, scheduled_time, duration) VALUES ($1, $2, $3::timestamp, $4) RETURNING id',
+      'INSERT INTO interviews (student_id, test_id, scheduled_time, duration) VALUES ($1, $2, $3::timestamptz, $4) RETURNING id, scheduled_time',
       [resolvedStudentId, test_id, scheduled_time, duration || 60]
     );
+
+    console.log('Stored interview with scheduled_time:', result.rows[0].scheduled_time);
 
     return res.json({ success: true, interview_id: result.rows[0].id });
   } catch (error) {
