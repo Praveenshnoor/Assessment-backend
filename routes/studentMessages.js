@@ -263,23 +263,15 @@ router.get('/unread-count', verifyAdmin, async (req, res) => {
  */
 router.get('/student-unread-count', verifySession, async (req, res) => {
     try {
-        // Get student ID from Firebase auth
-        const firebaseUid = req.firebaseUid;
+        // Get student ID from verifySession middleware
+        const studentId = req.studentId;
         
-        // Find student by Firebase UID to get roll_number
-        const studentResult = await pool.query(
-            'SELECT roll_number FROM students WHERE firebase_uid = $1',
-            [firebaseUid]
-        );
-
-        if (studentResult.rows.length === 0) {
+        if (!studentId) {
             return res.json({
                 success: true,
                 count: 0
             });
         }
-
-        const studentId = studentResult.rows[0].roll_number;
 
         // Count unread admin replies for this student
         const result = await pool.query(
@@ -307,23 +299,15 @@ router.get('/student-unread-count', verifySession, async (req, res) => {
  */
 router.post('/mark-student-read', verifySession, async (req, res) => {
     try {
-        // Get student ID from Firebase auth
-        const firebaseUid = req.firebaseUid;
+        // Get student ID from verifySession middleware
+        const studentId = req.studentId;
         
-        // Find student by Firebase UID to get roll_number
-        const studentResult = await pool.query(
-            'SELECT roll_number FROM students WHERE firebase_uid = $1',
-            [firebaseUid]
-        );
-
-        if (studentResult.rows.length === 0) {
+        if (!studentId) {
             return res.json({
                 success: true,
                 message: 'No messages to mark as read'
             });
         }
-
-        const studentId = studentResult.rows[0].roll_number;
 
         // Mark all admin replies as read for this student
         const result = await pool.query(
@@ -501,23 +485,15 @@ router.post('/mark-all-read', verifyAdmin, async (req, res) => {
  */
 router.get('/conversation', verifySession, async (req, res) => {
     try {
-        // Get student ID from Firebase auth
-        const firebaseUid = req.firebaseUid;
+        // Get student ID from verifySession middleware (this is the actual student.id)
+        const studentId = req.studentId;
         
-        // Find student by Firebase UID - get roll_number which is used as student_id in messages
-        const studentResult = await pool.query(
-            'SELECT roll_number, full_name, institute FROM students WHERE firebase_uid = $1',
-            [firebaseUid]
-        );
-
-        if (studentResult.rows.length === 0) {
+        if (!studentId) {
             return res.status(404).json({
                 success: false,
-                message: 'Student not found'
+                message: 'Student ID not found in session'
             });
         }
-
-        const studentId = studentResult.rows[0].roll_number;
 
         // Get all messages for this student (both sent and received)
         const messagesResult = await pool.query(
