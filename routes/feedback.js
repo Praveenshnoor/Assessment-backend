@@ -2,11 +2,13 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const verifyAdmin = require('../middleware/verifyAdmin');
+const { verifySession } = require('../middleware/verifySession');
 
-// Submit feedback (student) - No auth required since we have studentId
-router.post('/', async (req, res) => {
+// Submit feedback (student) - Requires student authentication
+router.post('/', verifySession, async (req, res) => {
     try {
-        const { studentId, testId, rating, difficulty, feedbackText, submissionReason } = req.body;
+        const { testId, rating, difficulty, feedbackText, submissionReason } = req.body;
+        const studentId = req.studentId; // From verifySession middleware
 
         // Validate required fields
         if (!studentId || !testId) {

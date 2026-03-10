@@ -282,4 +282,45 @@ router.put('/change-password', verifyAdmin, async (req, res) => {
     }
 });
 
+/**
+ * POST /api/admin/validate-token
+ * Validate admin token and return admin info
+ */
+router.post('/validate-token', verifyAdmin, async (req, res) => {
+    try {
+        // If we reach here, token is valid (verifyAdmin middleware passed)
+        return res.json({
+            success: true,
+            message: 'Token is valid',
+            admin: req.admin.adminData,
+        });
+    } catch (error) {
+        console.error('[ADMIN TOKEN VALIDATION] Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+        });
+    }
+});
+
+/**
+ * POST /api/admin/logout
+ * Logout admin (client-side token removal)
+ */
+router.post('/logout', verifyAdmin, async (req, res) => {
+    try {
+        // For now, just confirm logout (token invalidation would require token blacklist)
+        return res.json({
+            success: true,
+            message: 'Logged out successfully',
+        });
+    } catch (error) {
+        console.error('[ADMIN LOGOUT] Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+        });
+    }
+});
+
 module.exports = router;

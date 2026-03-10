@@ -44,11 +44,12 @@ const upload = multer({
 
 /**
  * POST /api/student-messages
- * Submit a new student support message
+ * Submit a new student support message (requires student authentication)
  */
-router.post('/', upload.single('image'), async (req, res) => {
+router.post('/', verifySession, upload.single('image'), async (req, res) => {
     try {
-        const { name, email, message, topic, studentId, college } = req.body;
+        const { message, topic } = req.body;
+        const studentId = req.studentId; // From verifySession middleware
         
         if (!message || !message.trim()) {
             return res.status(400).json({
@@ -57,6 +58,20 @@ router.post('/', upload.single('image'), async (req, res) => {
             });
         }
 
+        // Get student details from database
+        const studentResult = await pool.query(
+            'SELECT full_name, email, institute FROM students WHERE id = $1',
+            [studentId]
+        );
+
+        if (studentResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        const student = studentResult.rows[0];
         const imagePath = req.file ? `/uploads/student-messages/${req.file.filename}` : null;
 
         const result = await pool.query(
@@ -65,13 +80,13 @@ router.post('/', upload.single('image'), async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, 'unread', NOW(), $6, $7, 'student')
              RETURNING id, created_at, image_path`,
             [
-                name?.trim() || 'Anonymous',
-                email?.trim() || null,
+                student.full_name || 'Anonymous',
+                student.email || null,
                 message.trim(),
-                topic || 'General',
+                topic?.trim() || 'General',
                 imagePath,
-                studentId || null,
-                college || null
+                studentId,
+                student.institute || 'Unknown',
             ]
         );
 

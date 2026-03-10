@@ -53,9 +53,22 @@ const proctoringLimiter = rateLimit({
   skipFailedRequests: true,
 });
 
+// Admin operations rate limiter - Per IP address
+const adminLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 1000, // 1000 admin operations per hour
+  message: {
+    success: false,
+    message: 'Too many admin operations, please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 module.exports = {
   apiLimiter,
   authLimiter,
   submissionLimiter,
   proctoringLimiter,
+  adminLimiter,
 };

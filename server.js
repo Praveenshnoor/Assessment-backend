@@ -30,7 +30,7 @@ const studentMessagesRoutes = require('./routes/studentMessages');
 const interviewsRoutes = require('./routes/interviews.routes');
 
 // Import middleware
-const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter } = require('./middleware/rateLimiter');
+const { authLimiter, apiLimiter, submissionLimiter, proctoringLimiter, adminLimiter } = require('./middleware/rateLimiter');
 const { checkMaintenance } = require('./middleware/maintenance');
 
 // Initialize Express app
@@ -122,10 +122,10 @@ app.use(expressLogger); // Structured logging with Pino
 
 // Apply rate limiting
 app.use('/api/auth', authLimiter); // Auth endpoints
-app.use('/api/admin/auth', authLimiter); // Admin auth endpoints
+app.use('/api/admin', authLimiter, adminLimiter); // Admin auth endpoints with admin rate limiting
 app.use('/api/student/submit-exam', submissionLimiter); // Submission endpoints
 app.use('/api/student/save-progress', submissionLimiter); // Progress save endpoints
-app.use('/api', apiLimiter); // General API endpoints
+app.use('/api', apiLimiter); // General API endpoints (fallback)
 
 // Make socket.io accessible to routes for real-time notifications
 app.set('io', io);
