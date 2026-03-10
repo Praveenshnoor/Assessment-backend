@@ -261,6 +261,30 @@ router.post('/:id/start', verifyAdmin, async (req, res) => {
   }
 });
 
+// Reschedule interview (Admin only)
+router.post('/:id/reschedule', verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { scheduled_time, duration } = req.body;
+
+    if (!scheduled_time) {
+      return res.status(400).json({ success: false, message: 'scheduled_time is required' });
+    }
+
+    await db.pool.query(
+      `UPDATE interviews
+       SET scheduled_time = $1, duration = COALESCE($2, duration), status = 'scheduled', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [scheduled_time, duration || null, id]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Reschedule interview error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reschedule interview' });
+  }
+});
+
 // Clear student's peer ID when they leave the room (student only)
 router.post('/:id/leave', verifyAnyUser, async (req, res) => {
   try {
