@@ -23,6 +23,7 @@ const institutesRoutes = require('./routes/institutes');
 const proctoringRoutes = require('./routes/proctoring');
 const feedbackRoutes = require('./routes/feedback');
 const settingsRoutes = require('./routes/settings');
+const studentMessagesRoutes = require('./routes/studentMessages');
 // DISABLED: Coding questions and code execution features
 // const codeExecutionRoutes = require('./routes/codeExecution.routes');
 // const codingQuestionsRoutes = require('./routes/codingQuestions.routes');
@@ -64,8 +65,29 @@ const PORT = process.env.PORT || 5000;
 // Trust proxy - Required for Render deployment to get correct client IP
 app.set('trust proxy', 1);
 
+// Serve static files for uploaded images BEFORE helmet (to avoid CSP issues)
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+}));
+
 // Middleware
-app.use(helmet()); // Security headers
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            imgSrc: ["'self'", "data:", "blob:", "http://localhost:*", "https://*"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+            fontSrc: ["'self'", "https:", "data:"],
+            connectSrc: ["'self'", "http://localhost:*", "https://*", "wss://*", "ws://*"],
+        }
+    }
+})); // Security headers
 
 // CORS configuration - Allow multiple origins
 const allowedOrigins = [
@@ -105,7 +127,8 @@ app.use('/api/student/submit-exam', submissionLimiter); // Submission endpoints
 app.use('/api/student/save-progress', submissionLimiter); // Progress save endpoints
 app.use('/api', apiLimiter); // General API endpoints
 
-
+// Make socket.io accessible to routes for real-time notifications
+app.set('io', io);
 
 // API Routes
 app.use('/api', checkMaintenance, authRoutes); // Protect student auth with maintenance check
@@ -118,6 +141,7 @@ app.use('/api/institutes', institutesRoutes);
 app.use('/api/proctoring', proctoringRoutes);
 app.use('/api/feedback', checkMaintenance, feedbackRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/student-messages', studentMessagesRoutes);
 // DISABLED: Coding questions and code execution features
 // app.use('/api/code', codeExecutionRoutes);
 // app.use('/api/coding-questions', codingQuestionsRoutes);
@@ -178,6 +202,11 @@ server.listen(PORT, () => {
 const activeSessions = new Map(); // studentId -> { socketId, testId, studentName, startTime, isMonitored }
 const adminSockets = new Set(); // Set of admin socket IDs
 const monitoredStudents = new Set(); // Set of student IDs currently being monitored
+
+// Socket.io - Support Message Tracking
+const studentSupportSockets = new Map(); // rollNumber -> socketId for support message notifications
+// Make these accessible to routes
+app.set('studentSupportSockets', studentSupportSockets);
 
 // Proctoring configuration
 const PROCTORING_CONFIG = {
@@ -393,6 +422,56 @@ io.on('connection', (socket) => {
             selectStudentsForMonitoring();
         }
     });
+
+    // ============================================
+    // SUPPORT MESSAGE NOTIFICATION EVENTS
+    // ============================================
+    
+    // Student joins support notifications (for receiving admin reply notifications)
+    socket.on('student:join-support', (data) => {
+        const { rollNumber, studentName } = data;
+        if (!rollNumber) {
+            logger.warn({ socketId: socket.id }, 'Student tried to join support without rollNumber');
+            return;
+        }
+        
+        const rollNumberStr = String(rollNumber);
+        studentSupportSockets.set(rollNumberStr, socket.id);
+        socket.join(`support-student-${rollNumberStr}`);
+        socket.rollNumber = rollNumberStr;
+        
+        // Debug: List all rooms this socket is in
+        const rooms = Array.from(socket.rooms);
+        logger.info({ 
+            rollNumber: rollNumberStr, 
+            studentName, 
+            socketId: socket.id,
+            rooms: rooms,
+            roomJoined: `support-student-${rollNumberStr}`
+        }, 'Student joined support notifications');
+        
+        // Send confirmation back to student
+        socket.emit('student:support-joined', { 
+            success: true, 
+            room: `support-student-${rollNumberStr}`,
+            socketId: socket.id
+        });
+    });
+    
+    // Admin joins support notifications room (for receiving student message notifications)
+    socket.on('admin:join-support', () => {
+        socket.join('admin-support-room');
+        socket.isAdminSupport = true;
+        
+        logger.info({ socketId: socket.id }, 'Admin joined support notification room');
+        
+        // Confirm join
+        socket.emit('admin:support-joined', { success: true });
+    });
+
+    // ============================================
+    // END SUPPORT MESSAGE NOTIFICATION EVENTS
+    // ============================================
 
     // Frame-based proctoring - Receive frame from student (ONLY if monitored)
     socket.on('proctoring:frame', (data) => {
@@ -825,6 +904,12 @@ io.on('connection', (socket) => {
                     selectStudentsForMonitoring();
                 }
             }
+        }
+        
+        // Clean up support socket if present
+        if (socket.rollNumber) {
+            studentSupportSockets.delete(socket.rollNumber);
+            logger.debug({ rollNumber: socket.rollNumber }, 'Cleaned up support socket');
         }
     });
 
