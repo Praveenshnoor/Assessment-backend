@@ -411,8 +411,8 @@ router.post('/:instituteId/assign-test', verifyAdmin, async (req, res) => {
 
         if (existingAssignment.rows.length > 0) {
             await client.query('ROLLBACK');
-            return res.status(409).json({
-                success: false,
+            return res.status(200).json({
+                success: true,
                 message: `Test "${testTitle}" is already assigned to this institute`,
                 already_assigned: true
             });

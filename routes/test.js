@@ -51,12 +51,13 @@ router.get('/', verifyAdmin, async (req, res) => {
                 t.status,
                 t.duration,
                 t.max_attempts,
+                t.passing_percentage,
                 t.start_datetime,
                 t.end_datetime,
                 COUNT(q.id) as question_count
             FROM tests t
             LEFT JOIN questions q ON t.id = q.test_id
-            GROUP BY t.id, t.title, t.description, t.job_role, t.created_at, t.status, t.duration, t.max_attempts, t.start_datetime, t.end_datetime
+            GROUP BY t.id, t.title, t.description, t.job_role, t.created_at, t.status, t.duration, t.max_attempts, t.passing_percentage, t.start_datetime, t.end_datetime
             ORDER BY t.created_at DESC
         `);
 
@@ -1011,8 +1012,8 @@ router.post('/assign', verifyAdmin, async (req, res) => {
         // If all students already have this test assigned
         if (newAssignmentIds.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(400).json({
-                success: false,
+            return res.status(200).json({
+                success: true,
                 message: student_ids.length === 1 
                     ? 'This test is already assigned to this student'
                     : `All ${student_ids.length} selected student(s) already have this test assigned`,
