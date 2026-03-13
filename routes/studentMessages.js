@@ -44,12 +44,11 @@ const upload = multer({
 
 /**
  * POST /api/student-messages
- * Submit a new student support message (requires student authentication)
+ * Submit a new student support message
  */
-router.post('/', verifySession, upload.single('image'), async (req, res) => {
+router.post('/', upload.single('image'), async (req, res) => {
     try {
-        const { message, topic } = req.body;
-        const studentId = req.studentId; // From verifySession middleware
+        const { name, email, message, topic, studentId, college } = req.body;
         
         if (!message || !message.trim()) {
             return res.status(400).json({
@@ -58,20 +57,6 @@ router.post('/', verifySession, upload.single('image'), async (req, res) => {
             });
         }
 
-        // Get student details from database
-        const studentResult = await pool.query(
-            'SELECT full_name, email, institute FROM students WHERE id = $1',
-            [studentId]
-        );
-
-        if (studentResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found'
-            });
-        }
-
-        const student = studentResult.rows[0];
         const imagePath = req.file ? `/uploads/student-messages/${req.file.filename}` : null;
 
         const result = await pool.query(
@@ -80,33 +65,33 @@ router.post('/', verifySession, upload.single('image'), async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, 'unread', NOW(), $6, $7, 'student')
              RETURNING id, created_at, image_path`,
             [
-                student.full_name || 'Anonymous',
-                student.email || null,
+                name?.trim() || 'Anonymous',
+                email?.trim() || null,
                 message.trim(),
-                topic?.trim() || 'General',
+                topic || 'General',
                 imagePath,
-                studentId,
-                student.institute || 'Unknown',
+                studentId || null,
+                college || null
             ]
         );
 
         logger.info({
             event: 'student_message_created',
             messageId: result.rows[0].id,
-            topic: topic?.trim() || 'General',
+            topic,
             studentId,
-            college: student.institute || 'Unknown',
+            college,
             hasImage: !!imagePath
         });
 
-        // Emit socket notification to admins - FIXED: Use correct variables
+        // Emit socket notification to admins
         const io = req.app.get('io');
         if (io) {
             io.to('admin-support-room').emit('support:new-student-message', {
                 id: result.rows[0].id,
-                studentName: student.full_name || 'Anonymous',
+                studentName: name?.trim() || 'Anonymous',
                 studentId: studentId || null,
-                college: student.institute || null,
+                college: college || null,
                 messagePreview: message.trim().substring(0, 100) + (message.length > 100 ? '...' : ''),
                 topic: topic || 'General',
                 createdAt: result.rows[0].created_at,
@@ -134,37 +119,25 @@ router.post('/', verifySession, upload.single('image'), async (req, res) => {
 
 /**
  * GET /api/student-messages
- * Get all student messages grouped by student (Admin only) - FIXED: Group by student_id
+ * Get all student messages (Admin only)
  */
 router.get('/', verifyAdmin, async (req, res) => {
     try {
         const { status, topic, college, page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
 
-        // Get latest message from each student conversation
         let query = `
-            WITH latest_messages AS (
-                SELECT DISTINCT ON (student_id) 
-                    id, name, email, message, topic, image_path, status, created_at, read_at, 
-                    student_id, college, sender_type,
-                    (SELECT COUNT(*) FROM student_messages sm2 WHERE sm2.student_id = sm.student_id AND sm2.sender_type = 'student' AND sm2.status = 'unread') as unread_count
-                FROM student_messages sm
-                WHERE student_id IS NOT NULL
-                ORDER BY student_id, created_at DESC
-            )
-            SELECT * FROM latest_messages
-            WHERE 1=1
+            SELECT id, name, email, message, topic, image_path, status, created_at, read_at, 
+                   student_id, college, sender_type
+            FROM student_messages
+            WHERE sender_type = 'student'
         `;
         const params = [];
         let paramIndex = 1;
 
         if (status && status !== 'all') {
-            if (status === 'unread') {
-                query += ` AND unread_count > 0`;
-            } else {
-                query += ` AND status = $${paramIndex++}`;
-                params.push(status);
-            }
+            query += ` AND status = $${paramIndex++}`;
+            params.push(status);
         }
 
         if (topic) {
@@ -182,15 +155,15 @@ router.get('/', verifyAdmin, async (req, res) => {
 
         const result = await pool.query(query, params);
 
-        // Get total count of unique students
-        let countQuery = `
-            SELECT COUNT(DISTINCT student_id) 
-            FROM student_messages 
-            WHERE student_id IS NOT NULL
-        `;
+        // Get total count
+        let countQuery = `SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student'`;
         const countParams = [];
         let countParamIndex = 1;
 
+        if (status && status !== 'all') {
+            countQuery += ` AND status = $${countParamIndex++}`;
+            countParams.push(status);
+        }
         if (topic) {
             countQuery += ` AND topic = $${countParamIndex++}`;
             countParams.push(topic);
@@ -231,9 +204,6 @@ router.get('/', verifyAdmin, async (req, res) => {
     }
 });
 
-// ... rest of the routes remain the same ...
-
-module.exports = router;
 /**
  * GET /api/student-messages/unread-count
  * Get unread message count (Admin only)
@@ -263,15 +233,23 @@ router.get('/unread-count', verifyAdmin, async (req, res) => {
  */
 router.get('/student-unread-count', verifySession, async (req, res) => {
     try {
-        // Get student ID from verifySession middleware
-        const studentId = req.studentId;
+        // Get student ID from Firebase auth
+        const firebaseUid = req.firebaseUid;
         
-        if (!studentId) {
+        // Find student by Firebase UID to get roll_number
+        const studentResult = await pool.query(
+            'SELECT roll_number FROM students WHERE firebase_uid = $1',
+            [firebaseUid]
+        );
+
+        if (studentResult.rows.length === 0) {
             return res.json({
                 success: true,
                 count: 0
             });
         }
+
+        const studentId = studentResult.rows[0].roll_number;
 
         // Count unread admin replies for this student
         const result = await pool.query(
@@ -299,15 +277,23 @@ router.get('/student-unread-count', verifySession, async (req, res) => {
  */
 router.post('/mark-student-read', verifySession, async (req, res) => {
     try {
-        // Get student ID from verifySession middleware
-        const studentId = req.studentId;
+        // Get student ID from Firebase auth
+        const firebaseUid = req.firebaseUid;
         
-        if (!studentId) {
+        // Find student by Firebase UID to get roll_number
+        const studentResult = await pool.query(
+            'SELECT roll_number FROM students WHERE firebase_uid = $1',
+            [firebaseUid]
+        );
+
+        if (studentResult.rows.length === 0) {
             return res.json({
                 success: true,
                 message: 'No messages to mark as read'
             });
         }
+
+        const studentId = studentResult.rows[0].roll_number;
 
         // Mark all admin replies as read for this student
         const result = await pool.query(
@@ -454,6 +440,78 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * DELETE /api/student-messages/conversation/:studentId
+ * Delete full conversation for a student (Admin only)
+ */
+router.delete('/conversation/:studentId', verifyAdmin, async (req, res) => {
+    const { studentId } = req.params;
+
+    if (!studentId || !studentId.trim()) {
+        return res.status(400).json({
+            success: false,
+            message: 'Student ID is required'
+        });
+    }
+
+    const normalizedStudentId = studentId.trim();
+
+    try {
+        const messagesResult = await pool.query(
+            `SELECT id, image_path
+             FROM student_messages
+             WHERE student_id = $1`,
+            [normalizedStudentId]
+        );
+
+        if (messagesResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conversation not found'
+            });
+        }
+
+        await pool.query('DELETE FROM student_messages WHERE student_id = $1', [normalizedStudentId]);
+
+        for (const row of messagesResult.rows) {
+            if (!row.image_path) continue;
+
+            const fullPath = path.join(__dirname, '..', row.image_path);
+            if (fs.existsSync(fullPath)) {
+                try {
+                    fs.unlinkSync(fullPath);
+                } catch (fileErr) {
+                    logger.warn({
+                        err: fileErr,
+                        event: 'conversation_image_delete_failed',
+                        studentId: normalizedStudentId,
+                        messageId: row.id,
+                        imagePath: row.image_path
+                    });
+                }
+            }
+        }
+
+        logger.info({
+            event: 'student_conversation_deleted',
+            studentId: normalizedStudentId,
+            deletedMessages: messagesResult.rows.length
+        });
+
+        res.json({
+            success: true,
+            message: 'Conversation deleted successfully',
+            deletedCount: messagesResult.rows.length
+        });
+    } catch (error) {
+        logger.error({ err: error, event: 'delete_conversation_error', studentId: normalizedStudentId });
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete conversation'
+        });
+    }
+});
+
+/**
  * POST /api/student-messages/mark-all-read
  * Mark all messages as read (Admin only)
  */
@@ -485,15 +543,23 @@ router.post('/mark-all-read', verifyAdmin, async (req, res) => {
  */
 router.get('/conversation', verifySession, async (req, res) => {
     try {
-        // Get student ID from verifySession middleware (this is the actual student.id)
-        const studentId = req.studentId;
+        // Get student ID from Firebase auth
+        const firebaseUid = req.firebaseUid;
         
-        if (!studentId) {
+        // Find student by Firebase UID - get roll_number which is used as student_id in messages
+        const studentResult = await pool.query(
+            'SELECT roll_number, full_name, institute FROM students WHERE firebase_uid = $1',
+            [firebaseUid]
+        );
+
+        if (studentResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: 'Student ID not found in session'
+                message: 'Student not found'
             });
         }
+
+        const studentId = studentResult.rows[0].roll_number;
 
         // Get all messages for this student (both sent and received)
         const messagesResult = await pool.query(
@@ -698,3 +764,5 @@ router.post('/:id/reply', verifyAdmin, upload.single('image'), async (req, res) 
         });
     }
 });
+
+module.exports = router;
