@@ -958,15 +958,6 @@ io.on('connection', (socket) => {
                     timestamp: new Date().toISOString()
                 });
                 
-                // Also send emergency call event as fallback
-                setTimeout(() => {
-                    console.log(`Sending emergency call event to interview room: interview-${interviewId}`);
-                    socket.to(`interview-${interviewId}`).emit('interview:emergency-call', {
-                        interviewId,
-                        timestamp: new Date().toISOString()
-                    });
-                }, 1000);
-                
                 // Notify student on dashboard (if they're on dashboard page)
                 io.to(`student-dashboard-${interview.student_id}`).emit('interview:incoming-call', {
                     interviewId: interview.id,
@@ -1007,6 +998,36 @@ io.on('connection', (socket) => {
         socket.to(`interview-${interviewId}`).emit('interview:student-ready', {
             peerId,
             timestamp: new Date().toISOString()
+        });
+    });
+    
+    // Get room status - who's currently in the room
+    socket.on('interview:get-room-status', (data) => {
+        const { interviewId } = data;
+        
+        console.log(`Getting room status for interview-${interviewId}`);
+        
+        const roomSockets = io.sockets.adapter.rooms.get(`interview-${interviewId}`);
+        const participants = [];
+        
+        if (roomSockets) {
+            roomSockets.forEach(socketId => {
+                const participantSocket = io.sockets.sockets.get(socketId);
+                if (participantSocket && participantSocket.id !== socket.id && participantSocket.interviewRole) {
+                    participants.push({
+                        peerId: participantSocket.peerId,
+                        role: participantSocket.interviewRole,
+                        socketId: participantSocket.id
+                    });
+                }
+            });
+        }
+        
+        console.log(`Room status for interview-${interviewId}:`, participants);
+        
+        socket.emit('interview:room-status', { 
+            interviewId,
+            participants 
         });
     });
     
