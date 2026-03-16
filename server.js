@@ -1188,6 +1188,197 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ===== SIMPLE-PEER HANDLERS =====
+    
+    // Join interview room (simple-peer version)
+    socket.on('join-interview', (data) => {
+        const { interviewId, role, userId } = data;
+        
+        logger.info({ 
+            socketId: socket.id, 
+            interviewId, 
+            role, 
+            userId 
+        }, 'User joining interview room (simple-peer)');
+        
+        socket.join(`interview-${interviewId}`);
+        socket.interviewId = interviewId;
+        socket.interviewRole = role;
+        socket.userId = userId;
+        
+        // Notify other participants
+        socket.to(`interview-${interviewId}`).emit('user-joined', {
+            socketId: socket.id,
+            role,
+            userId
+        });
+        
+        logger.info({ 
+            socketId: socket.id, 
+            interviewId, 
+            role 
+        }, 'User successfully joined interview room (simple-peer)');
+    });
+
+    // Handle WebRTC signaling for simple-peer
+    socket.on('webrtc-signal', (data) => {
+        const { interviewId, signal, role } = data;
+        
+        logger.info({ 
+            interviewId, 
+            signalType: signal.type,
+            from: role,
+            socketId: socket.id
+        }, 'WebRTC signal received (simple-peer)');
+        
+        // Forward signal to other participants in the interview room
+        socket.to(`interview-${interviewId}`).emit('webrtc-signal', {
+            signal,
+            role,
+            fromSocketId: socket.id
+        });
+    });
+
+    // Handle call initiation
+    socket.on('initiate-call', (data) => {
+        const { interviewId, role } = data;
+        
+        logger.info({ 
+            interviewId, 
+            role,
+            socketId: socket.id
+        }, 'Call initiated (simple-peer)');
+        
+        // Notify other participants
+        socket.to(`interview-${interviewId}`).emit('call-initiated', {
+            role,
+            fromSocketId: socket.id
+        });
+    });
+
+    // Handle chat messages (simple-peer version)
+    socket.on('send-chat', async (data) => {
+        const { interviewId, role, message, timestamp } = data;
+        
+        logger.info({ 
+            interviewId, 
+            role,
+            messageLength: message.length,
+            socketId: socket.id
+        }, 'Chat message received (simple-peer)');
+        
+        try {
+            // Store message in database
+            const query = `
+                INSERT INTO interview_chat_messages (interview_id, sender_type, sender_name, message, created_at)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING *
+            `;
+            
+            const senderName = role === 'admin' ? 'Interviewer' : 'Student';
+            const result = await pool.query(query, [
+                interviewId,
+                role,
+                senderName,
+                message,
+                timestamp || new Date().toISOString()
+            ]);
+            
+            const savedMessage = result.rows[0];
+            
+            // Broadcast to all participants in the interview room
+            io.to(`interview-${interviewId}`).emit('chat-message', {
+                id: savedMessage.id,
+                role: savedMessage.sender_type,
+                senderName: savedMessage.sender_name,
+                message: savedMessage.message,
+                timestamp: savedMessage.created_at
+            });
+            
+        } catch (error) {
+            logger.error({ 
+                error: error.message, 
+                interviewId,
+                socketId: socket.id
+            }, 'Failed to save chat message (simple-peer)');
+            
+            socket.emit('chat-error', { 
+                error: 'Failed to send message' 
+            });
+        }
+    });
+
+    // Get chat history (simple-peer version)
+    socket.on('get-chat-history', async (data) => {
+        const { interviewId } = data;
+        
+        try {
+            const query = `
+                SELECT * FROM interview_chat_messages 
+                WHERE interview_id = $1 
+                ORDER BY created_at ASC
+            `;
+            
+            const result = await pool.query(query, [interviewId]);
+            
+            socket.emit('chat-history', {
+                messages: result.rows.map(row => ({
+                    id: row.id,
+                    role: row.sender_type,
+                    senderName: row.sender_name,
+                    message: row.message,
+                    timestamp: row.created_at
+                }))
+            });
+            
+        } catch (error) {
+            logger.error({ 
+                error: error.message, 
+                interviewId,
+                socketId: socket.id
+            }, 'Failed to fetch chat history (simple-peer)');
+            
+            socket.emit('chat-history', { messages: [] });
+        }
+    });
+
+    // Handle interview end (simple-peer version)
+    socket.on('end-interview', (data) => {
+        const { interviewId } = data;
+        
+        logger.info({ 
+            interviewId,
+            socketId: socket.id,
+            role: socket.interviewRole
+        }, 'Interview ended (simple-peer)');
+        
+        // Notify other participants
+        socket.to(`interview-${interviewId}`).emit('interview-ended', {
+            endedBy: socket.interviewRole
+        });
+    });
+
+    // Handle leaving interview (simple-peer version)
+    socket.on('leave-interview', (data) => {
+        const { interviewId, role } = data;
+        
+        logger.info({ 
+            interviewId,
+            role,
+            socketId: socket.id
+        }, 'User leaving interview (simple-peer)');
+        
+        socket.leave(`interview-${interviewId}`);
+        
+        // Notify other participants
+        socket.to(`interview-${interviewId}`).emit('user-left', {
+            role,
+            socketId: socket.id
+        });
+    });
+
+    // ===== END SIMPLE-PEER HANDLERS =====
+
     // Keepalive ping
     socket.on('ping', () => {
         socket.emit('pong');
