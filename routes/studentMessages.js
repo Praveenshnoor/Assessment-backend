@@ -232,8 +232,6 @@ router.get('/', verifyAdmin, async (req, res) => {
 });
 
 // ... rest of the routes remain the same ...
-
-module.exports = router;
 /**
  * GET /api/student-messages/unread-count
  * Get unread message count (Admin only)
@@ -250,9 +248,10 @@ router.get('/unread-count', verifyAdmin, async (req, res) => {
         });
     } catch (error) {
         logger.error({ err: error, event: 'unread_count_error' });
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch unread count'
+        res.status(200).json({
+            success: true,
+            count: 0,
+            warning: 'Fallback unread count due to backend error'
         });
     }
 });
@@ -286,9 +285,10 @@ router.get('/student-unread-count', verifySession, async (req, res) => {
         });
     } catch (error) {
         logger.error({ err: error, event: 'student_unread_count_error' });
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch unread count'
+        res.status(200).json({
+            success: true,
+            count: 0,
+            warning: 'Fallback unread count due to backend error'
         });
     }
 });
@@ -698,3 +698,5 @@ router.post('/:id/reply', verifyAdmin, upload.single('image'), async (req, res) 
         });
     }
 });
+
+module.exports = router;
