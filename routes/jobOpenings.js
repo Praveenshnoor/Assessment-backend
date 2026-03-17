@@ -287,7 +287,7 @@ router.post('/:id/link-test', verifyAdmin, async (req, res) => {
         }
 
         // Verify test exists
-        const testCheck = await query('SELECT id, name FROM tests WHERE id = $1', [test_id]);
+        const testCheck = await query('SELECT id, title FROM tests WHERE id = $1', [test_id]);
         if (testCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
@@ -320,7 +320,7 @@ router.post('/:id/link-test', verifyAdmin, async (req, res) => {
             message: 'Test linked to job opening successfully',
             data: {
                 ...result.rows[0],
-                test_name: testCheck.rows[0].name
+                test_name: testCheck.rows[0].title
             }
         });
 
