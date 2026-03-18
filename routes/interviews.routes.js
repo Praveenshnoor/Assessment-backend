@@ -156,23 +156,24 @@ router.post('/schedule', verifyAdmin, async (req, res) => {
       });
     }
 
-    const emailResult = await sendInterviewScheduleEmail(
-      emailContext.email,
-      emailContext.full_name || 'Student',
-      emailContext.company_name || 'Hiring Team',
-      emailContext.job_role || 'Applied Role',
-      scheduled_time,
-      duration || 60,
-      emailContext.test_title || 'Assessment'
-    );
+    // TODO: Re-enable email once Resend API key is configured
+    // const emailResult = await sendInterviewScheduleEmail(
+    //   emailContext.email,
+    //   emailContext.full_name || 'Student',
+    //   emailContext.company_name || 'Hiring Team',
+    //   emailContext.job_role || 'Applied Role',
+    //   scheduled_time,
+    //   duration || 60,
+    //   emailContext.test_title || 'Assessment'
+    // );
 
-    if (!emailResult.success) {
-      await db.pool.query('DELETE FROM interviews WHERE id = $1', [result.rows[0].id]);
-      return res.status(502).json({
-        success: false,
-        message: `Interview email could not be sent to ${emailContext.email}. ${emailResult.error || 'Please check email configuration and try again.'}`
-      });
-    }
+    // if (!emailResult.success) {
+    //   await db.pool.query('DELETE FROM interviews WHERE id = $1', [result.rows[0].id]);
+    //   return res.status(502).json({
+    //     success: false,
+    //     message: `Interview email could not be sent to ${emailContext.email}. ${emailResult.error || 'Please check email configuration and try again.'}`
+    //   });
+    // }
 
     return res.json({ success: true, interview_id: result.rows[0].id });
   } catch (error) {
