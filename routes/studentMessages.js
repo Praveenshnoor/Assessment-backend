@@ -87,15 +87,35 @@ router.post('/', upload.single('image'), async (req, res) => {
         // Emit socket notification to admins
         const io = req.app.get('io');
         if (io) {
-            io.to('admin-support-room').emit('support:new-student-message', {
+            const realtimePayload = {
                 id: result.rows[0].id,
                 studentName: name?.trim() || 'Anonymous',
                 studentId: studentId || null,
                 college: college || null,
+                message: message.trim(),
                 messagePreview: message.trim().substring(0, 100) + (message.length > 100 ? '...' : ''),
                 topic: topic || 'General',
                 createdAt: result.rows[0].created_at,
                 hasImage: !!imagePath
+            };
+
+            io.to('admin-support-room').emit('support:new-student-message', realtimePayload);
+            io.to('admin-support-room').emit('receive_message', {
+                ...realtimePayload,
+                senderType: 'student',
+                recipient: 'admin'
+            });
+
+            const unreadResult = await pool.query(
+                "SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student' AND status = 'unread'"
+            );
+            const unreadCount = parseInt(unreadResult.rows[0].count);
+
+            io.to('admin-support-room').emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'admin',
+                unreadCount,
+                messageId: result.rows[0].id
             });
         }
 
@@ -304,6 +324,16 @@ router.post('/mark-student-read', verifySession, async (req, res) => {
             [studentId]
         );
 
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`support-student-${studentId}`).emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'student',
+                studentId,
+                unreadCount: 0
+            });
+        }
+
         res.json({
             success: true,
             message: `${result.rowCount} messages marked as read`
@@ -321,7 +351,7 @@ router.post('/mark-student-read', verifySession, async (req, res) => {
  * PATCH /api/student-messages/:id/read
  * Mark a message as read (Admin only)
  */
-router.patch('/:id/read', verifyAdmin, async (req, res) => {
+router.patch('/:id(\\d+)/read', verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -340,6 +370,19 @@ router.patch('/:id/read', verifyAdmin, async (req, res) => {
             });
         }
 
+        const io = req.app.get('io');
+        if (io) {
+            const unreadResult = await pool.query(
+                "SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student' AND status = 'unread'"
+            );
+            io.to('admin-support-room').emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'admin',
+                unreadCount: parseInt(unreadResult.rows[0].count),
+                messageId: id
+            });
+        }
+
         res.json({
             success: true,
             message: 'Message marked as read',
@@ -355,10 +398,52 @@ router.patch('/:id/read', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * PATCH /api/student-messages/thread/:studentId/read
+ * Mark all unread student messages in a thread as read (Admin only)
+ */
+router.patch('/thread/:studentId/read', verifyAdmin, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+
+        const result = await pool.query(
+            `UPDATE student_messages
+             SET status = 'read', read_at = NOW()
+             WHERE student_id = $1 AND sender_type = 'student' AND status = 'unread'
+             RETURNING id`,
+            [studentId]
+        );
+
+        const io = req.app.get('io');
+        if (io) {
+            const unreadResult = await pool.query(
+                "SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student' AND status = 'unread'"
+            );
+            io.to('admin-support-room').emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'admin',
+                unreadCount: parseInt(unreadResult.rows[0].count),
+                studentId
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `${result.rowCount} messages marked as read`
+        });
+    } catch (error) {
+        logger.error({ err: error, event: 'mark_thread_read_error' });
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark thread as read'
+        });
+    }
+});
+
+/**
  * PATCH /api/student-messages/:id/archive
  * Archive a message (Admin only)
  */
-router.patch('/:id/archive', verifyAdmin, async (req, res) => {
+router.patch('/:id(\\d+)/archive', verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -395,7 +480,7 @@ router.patch('/:id/archive', verifyAdmin, async (req, res) => {
  * DELETE /api/student-messages/:id
  * Delete a message (Admin only)
  */
-router.delete('/:id', verifyAdmin, async (req, res) => {
+router.delete('/:id(\\d+)', verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -440,6 +525,69 @@ router.delete('/:id', verifyAdmin, async (req, res) => {
 });
 
 /**
+ * DELETE /api/student-messages/thread/:studentId
+ * Delete complete conversation history for a student (Admin only)
+ */
+router.delete('/thread/:studentId', verifyAdmin, async (req, res) => {
+    try {
+        const { studentId } = req.params;
+
+        // Collect image paths before deletion.
+        const messagesResult = await pool.query(
+            `SELECT id, image_path FROM student_messages WHERE student_id = $1`,
+            [studentId]
+        );
+
+        if (messagesResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conversation not found'
+            });
+        }
+
+        await pool.query('DELETE FROM student_messages WHERE student_id = $1', [studentId]);
+
+        messagesResult.rows.forEach((row) => {
+            if (!row.image_path) {
+                return;
+            }
+            const safeRelativePath = row.image_path.replace(/^\/+/, '');
+            const fullPath = path.join(__dirname, '..', safeRelativePath);
+            if (fs.existsSync(fullPath)) {
+                fs.unlinkSync(fullPath);
+            }
+        });
+
+        const io = req.app.get('io');
+        if (io) {
+            const unreadResult = await pool.query(
+                "SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student' AND status = 'unread'"
+            );
+            io.to('admin-support-room').emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'admin',
+                unreadCount: parseInt(unreadResult.rows[0].count),
+                studentId
+            });
+        }
+
+        logger.info({ event: 'student_thread_deleted', studentId, deletedCount: messagesResult.rows.length });
+
+        res.json({
+            success: true,
+            message: 'Conversation deleted',
+            deletedCount: messagesResult.rows.length
+        });
+    } catch (error) {
+        logger.error({ err: error, event: 'delete_thread_error' });
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete conversation'
+        });
+    }
+});
+
+/**
  * POST /api/student-messages/mark-all-read
  * Mark all messages as read (Admin only)
  */
@@ -451,6 +599,15 @@ router.post('/mark-all-read', verifyAdmin, async (req, res) => {
              WHERE status = 'unread'
              RETURNING id`
         );
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to('admin-support-room').emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'admin',
+                unreadCount: 0
+            });
+        }
 
         res.json({
             success: true,
@@ -515,7 +672,7 @@ router.get('/conversation', verifySession, async (req, res) => {
  * GET /api/student-messages/:id/thread
  * Get full conversation thread for a student message (Admin only)
  */
-router.get('/:id/thread', verifyAdmin, async (req, res) => {
+router.get('/:id(\\d+)/thread', verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -581,7 +738,7 @@ router.get('/:id/thread', verifyAdmin, async (req, res) => {
  * POST /api/student-messages/:id/reply
  * Admin reply to a student message (Admin only)
  */
-router.post('/:id/reply', verifyAdmin, upload.single('image'), async (req, res) => {
+router.post('/:id(\\d+)/reply', verifyAdmin, upload.single('image'), async (req, res) => {
     try {
         const { id } = req.params;
         const { message } = req.body;
@@ -660,12 +817,35 @@ router.post('/:id/reply', verifyAdmin, upload.single('image'), async (req, res) 
                 allRooms: Array.from(io.sockets.adapter.rooms.keys()).filter(r => r.startsWith('support-student'))
             });
             
-            io.to(roomName).emit('support:new-admin-reply', {
+            const realtimePayload = {
                 id: result.rows[0].id,
+                studentId: originalMessage.student_id,
+                message: message.trim(),
                 messagePreview: message.trim().substring(0, 100) + (message.length > 100 ? '...' : ''),
                 createdAt: result.rows[0].created_at,
                 originalMessageId: id,
                 hasImage: !!imagePath
+            };
+
+            io.to(roomName).emit('support:new-admin-reply', realtimePayload);
+            io.to(roomName).emit('receive_message', {
+                ...realtimePayload,
+                senderType: 'admin',
+                recipient: 'student'
+            });
+
+            const unreadResult = await pool.query(
+                `SELECT COUNT(*) FROM student_messages
+                 WHERE student_id = $1 AND sender_type = 'admin' AND status = 'unread'`,
+                [originalMessage.student_id]
+            );
+
+            io.to(roomName).emit('new_notification', {
+                type: 'support-unread',
+                recipient: 'student',
+                studentId: originalMessage.student_id,
+                unreadCount: parseInt(unreadResult.rows[0].count),
+                messageId: result.rows[0].id
             });
         } else {
             logger.warn({

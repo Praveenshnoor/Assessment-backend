@@ -456,6 +456,24 @@ io.on('connection', (socket) => {
             room: `support-student-${rollNumberStr}`,
             socketId: socket.id
         });
+
+        // Sync unread count for this student on join
+        pool.query(
+            `SELECT COUNT(*) FROM student_messages
+             WHERE student_id = $1 AND sender_type = 'admin' AND status = 'unread'`,
+            [rollNumberStr]
+        )
+            .then((result) => {
+                socket.emit('new_notification', {
+                    type: 'support-unread',
+                    recipient: 'student',
+                    studentId: rollNumberStr,
+                    unreadCount: parseInt(result.rows[0].count)
+                });
+            })
+            .catch((error) => {
+                logger.error({ err: error, rollNumber: rollNumberStr }, 'Failed to sync student support unread count');
+            });
     });
     
     // Admin joins support notifications room (for receiving student message notifications)
@@ -467,6 +485,51 @@ io.on('connection', (socket) => {
         
         // Confirm join
         socket.emit('admin:support-joined', { success: true });
+
+        // Sync admin unread count on join
+        pool.query(
+            "SELECT COUNT(*) FROM student_messages WHERE sender_type = 'student' AND status = 'unread'"
+        )
+            .then((result) => {
+                socket.emit('new_notification', {
+                    type: 'support-unread',
+                    recipient: 'admin',
+                    unreadCount: parseInt(result.rows[0].count)
+                });
+            })
+            .catch((error) => {
+                logger.error({ err: error }, 'Failed to sync admin support unread count');
+            });
+    });
+
+    // Student can proactively mark support replies as read without refreshing.
+    socket.on('support:mark-read', async (data = {}) => {
+        const role = data.role || (socket.isAdminSupport ? 'admin' : 'student');
+
+        if (role === 'student') {
+            const rollNumber = String(data.rollNumber || socket.rollNumber || '');
+            if (!rollNumber) {
+                return;
+            }
+
+            try {
+                await pool.query(
+                    `UPDATE student_messages
+                     SET status = 'read', read_at = NOW()
+                     WHERE student_id = $1 AND sender_type = 'admin' AND status = 'unread'`,
+                    [rollNumber]
+                );
+
+                io.to(`support-student-${rollNumber}`).emit('new_notification', {
+                    type: 'support-unread',
+                    recipient: 'student',
+                    studentId: rollNumber,
+                    unreadCount: 0
+                });
+            } catch (error) {
+                logger.error({ err: error, rollNumber }, 'Failed to mark student support messages as read via socket');
+            }
+        }
     });
 
     // ============================================
