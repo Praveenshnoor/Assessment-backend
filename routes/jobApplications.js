@@ -471,9 +471,21 @@ router.get('/admin/stats/:jobId', verifyAdmin, async (req, res) => {
             `SELECT 
                 COUNT(*) AS total_applications,
                 COUNT(*) FILTER (WHERE status IN ('submitted', 'screening', 'assessment_assigned', 'assessment_completed')) AS in_progress,
-                COUNT(*) FILTER (WHERE status = 'assessment_assigned') AS assessment_assigned,
                 COUNT(*) FILTER (WHERE status = 'shortlisted') AS shortlisted,
                 COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
+                -- Count rows that will appear in Assessment Results tab:
+                -- distinct (student, test) pairs that have a submitted attempt linked to this job
+                (
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT DISTINCT ta.student_id, ta.test_id
+                        FROM job_applications ja2
+                        INNER JOIN test_attempts ta ON ta.job_application_id = ja2.id
+                        INNER JOIN job_opening_tests jot ON jot.test_id = ta.test_id AND jot.job_opening_id = ja2.job_opening_id
+                        WHERE ja2.job_opening_id = $1
+                          AND ta.submitted_at IS NOT NULL
+                    ) sub
+                ) AS attempted_count,
                 COUNT(*) FILTER (WHERE passed_assessment = true) AS passed_count,
                 AVG(assessment_score) FILTER (WHERE assessment_score IS NOT NULL) AS avg_assessment_score
              FROM job_applications
