@@ -203,8 +203,87 @@ async function runPendingMigrations() {
     }
 }
 
+// Auto-repair script to run immediately after migrations, ensuring Production DB heals old corrupted "Submitted" states automatically.
+async function autoRepairBrokenStatuses() {
+    try {
+        const appsRes = await pool.query(`
+            SELECT id, student_id, job_opening_id, status 
+            FROM job_applications 
+            WHERE status IN ('submitted', 'assessment_assigned', 'assessment_completed')
+        `);
+        if (appsRes.rows.length === 0) return;
+        console.log(`[Auto-Repair] Found ${appsRes.rows.length} pending applications to inspect...`);
+        let fixedCount = 0;
+
+        for (const app of appsRes.rows) {
+            const { id: applicationId, student_id: studentId, job_opening_id: jobOpeningId } = app;
+            const jotRes = await pool.query(`SELECT test_id FROM job_opening_tests WHERE job_opening_id = $1`, [jobOpeningId]);
+            const jobTestIds = jotRes.rows.map(r => r.test_id);
+            if (jobTestIds.length === 0) continue;
+
+            let hasTests = false;
+            for (const testId of jobTestIds) {
+                const testRes = await pool.query(`SELECT title FROM tests WHERE id = $1`, [testId]);
+                if (testRes.rows.length === 0) continue;
+                
+                const rRes = await pool.query(`
+                    SELECT r.* 
+                    FROM results r JOIN exams e ON r.exam_id = e.id 
+                    WHERE r.student_id = $1 AND e.name LIKE $2
+                `, [studentId, `%${testRes.rows[0].title}%`]);
+
+                if (rRes.rows.length > 0) {
+                    hasTests = true;
+                    const r = rRes.rows[rRes.rows.length - 1]; 
+                    const percentage = r.total_marks > 0 ? (r.marks_obtained / r.total_marks) * 100 : 0;
+
+                    await pool.query(`
+                        INSERT INTO test_attempts (student_id, test_id, job_application_id, total_marks, obtained_marks, percentage, submitted_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                        ON CONFLICT (student_id, test_id, job_application_id) DO UPDATE SET
+                            total_marks = EXCLUDED.total_marks, obtained_marks = EXCLUDED.obtained_marks,
+                            percentage = EXCLUDED.percentage, submitted_at = EXCLUDED.submitted_at
+                    `, [studentId, testId, applicationId, Math.round(r.total_marks || 0), Math.round(r.marks_obtained || 0), percentage]);
+                }
+            }
+
+            if (!hasTests) continue;
+
+            const testResultsCheck = await pool.query(`
+                SELECT t.title as test_name, t.passing_percentage, ta.percentage as student_percentage,
+                        CASE WHEN ta.percentage >= t.passing_percentage THEN true ELSE false END as passed
+                FROM test_attempts ta INNER JOIN tests t ON ta.test_id = t.id
+                WHERE ta.job_application_id = $1 AND ta.student_id = $2
+            `, [applicationId, studentId]);
+
+            if (testResultsCheck.rows.length >= jobTestIds.length) {
+                const violationsCheck = await pool.query(`
+                    SELECT COUNT(*) as total_violations
+                    FROM proctoring_violations pv INNER JOIN test_attempts ta ON pv.test_id = ta.test_id AND pv.student_id = ta.student_id::varchar
+                    WHERE ta.job_application_id = $1 AND ta.student_id = $2
+                `, [applicationId, studentId]);
+
+                const allTestsPassed = testResultsCheck.rows.every(row => row.passed);
+                const isFlagged = (parseInt(violationsCheck.rows[0]?.total_violations) || 0) > 5;
+                const newStatus = (allTestsPassed && !isFlagged) ? 'shortlisted' : 'rejected';
+                const avgScore = testResultsCheck.rows.reduce((sum, row) => sum + parseFloat(row.student_percentage || 0), 0) / (testResultsCheck.rows.length || 1);
+
+                await pool.query(`
+                    UPDATE job_applications
+                    SET status = $1, test_completed_at = CURRENT_TIMESTAMP, assessment_score = $2, passed_assessment = $3
+                    WHERE id = $4
+                `, [newStatus, avgScore, (allTestsPassed && !isFlagged), applicationId]);
+                fixedCount++;
+            }
+        }
+        if(fixedCount > 0) console.log(`✅ [Auto-Repair] Successfully healed ${fixedCount} corrupted job applications!`);
+    } catch (err) {
+        console.error('❌ [Auto-Repair] Failed during automatic state repair:', err.message);
+    }
+}
+
 // Start server
-runPendingMigrations().then(() => {
+runPendingMigrations().then(() => autoRepairBrokenStatuses()).then(() => {
     server.listen(PORT, () => {
         logger.info({
             port: PORT,
