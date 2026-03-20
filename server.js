@@ -259,9 +259,12 @@ async function autoRepairBrokenStatuses() {
             if (testResultsCheck.rows.length >= jobTestIds.length) {
                 const violationsCheck = await pool.query(`
                     SELECT COUNT(*) as total_violations
-                    FROM proctoring_violations pv INNER JOIN test_attempts ta ON pv.test_id = ta.test_id AND pv.student_id = ta.student_id::varchar
-                    WHERE ta.job_application_id = $1 AND ta.student_id = $2
-                `, [applicationId, studentId]);
+                    FROM proctoring_violations pv
+                    WHERE pv.student_id = $2::varchar
+                      AND pv.test_id IN (
+                          SELECT test_id FROM job_opening_tests WHERE job_opening_id = $3
+                      )
+                `, [applicationId, studentId, jobOpeningId]);
 
                 const allTestsPassed = testResultsCheck.rows.every(row => row.passed);
                 const isFlagged = (parseInt(violationsCheck.rows[0]?.total_violations) || 0) > 5;

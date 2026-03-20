@@ -929,8 +929,12 @@ router.post('/submit-exam', async (req, res) => {
                     const violationsCheck = await pool.query(`
                         SELECT COUNT(*) as total_violations
                         FROM proctoring_violations pv
-                        INNER JOIN test_attempts ta ON pv.test_id = ta.test_id AND pv.student_id = ta.student_id::varchar
-                        WHERE ta.job_application_id = $1 AND ta.student_id = $2
+                        WHERE pv.student_id = $2::varchar
+                          AND pv.test_id IN (
+                              SELECT test_id FROM job_opening_tests WHERE job_opening_id = (
+                                  SELECT job_opening_id FROM job_applications WHERE id = $1
+                              )
+                          )
                     `, [resolvedApplicationId, studentId]);
 
                     const allTestsPassed = testResultsCheck.rows.every(row => row.passed);
