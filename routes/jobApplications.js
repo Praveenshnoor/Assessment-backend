@@ -412,10 +412,7 @@ router.patch('/admin/application/:applicationId/status', verifyAdmin, async (req
     const adminId = req.admin.id; // verifyAdmin sets req.admin, not req.user
 
     const validStatuses = [
-        'submitted',
-        'screening',
         'assessment_assigned',
-        'assessment_completed',
         'shortlisted',
         'rejected'
     ];
@@ -473,9 +470,8 @@ router.get('/admin/stats/:jobId', verifyAdmin, async (req, res) => {
         const stats = await query(
             `SELECT 
                 COUNT(*) AS total_applications,
-                COUNT(*) FILTER (WHERE status = 'submitted') AS submitted,
+                COUNT(*) FILTER (WHERE status IN ('submitted', 'screening', 'assessment_assigned', 'assessment_completed')) AS in_progress,
                 COUNT(*) FILTER (WHERE status = 'assessment_assigned') AS assessment_assigned,
-                COUNT(*) FILTER (WHERE status = 'assessment_completed') AS assessment_completed,
                 COUNT(*) FILTER (WHERE status = 'shortlisted') AS shortlisted,
                 COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
                 COUNT(*) FILTER (WHERE passed_assessment = true) AS passed_count,
