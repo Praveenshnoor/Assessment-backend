@@ -188,27 +188,44 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Start server
-server.listen(PORT, () => {
-    logger.info({
-        port: PORT,
-        env: process.env.NODE_ENV || 'development',
-        pid: process.pid,
-        nodeVersion: process.version,
-    }, 'Server started successfully');
-    
-    console.log(`✅ Server running on port ${PORT}`);
-    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 API: http://localhost:${PORT}`);
-    console.log(`🔌 Socket.io: Ready for proctoring connections`);
-    console.log(`💚 Health: http://localhost:${PORT}/health`);
-    console.log(`📈 Metrics: http://localhost:${PORT}/metrics`);
-    console.log(`🔗 PeerJS: http://localhost:${PORT}/peerjs`);
-    
-    // Signal PM2 that app is ready
-    if (process.send) {
-        process.send('ready');
+// Run critical migrations automatically on startup
+async function runPendingMigrations() {
+    try {
+        const fs = require('fs');
+        const sqlPath = path.join(__dirname, 'migrations', 'add-job-application-to-test-attempts.sql');
+        if (fs.existsSync(sqlPath)) {
+            const sql = fs.readFileSync(sqlPath, 'utf8');
+            await pool.query(sql);
+            console.log('✅ Verified critical DB migration: add-job-application-to-test-attempts.sql');
+        }
+    } catch (err) {
+        console.error('❌ Failed to run auto-migration:', err.message);
     }
+}
+
+// Start server
+runPendingMigrations().then(() => {
+    server.listen(PORT, () => {
+        logger.info({
+            port: PORT,
+            env: process.env.NODE_ENV || 'development',
+            pid: process.pid,
+            nodeVersion: process.version,
+        }, 'Server started successfully');
+        
+        console.log(`✅ Server running on port ${PORT}`);
+        console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`🔗 API: http://localhost:${PORT}`);
+        console.log(`🔌 Socket.io: Ready for proctoring connections`);
+        console.log(`💚 Health: http://localhost:${PORT}/health`);
+        console.log(`📈 Metrics: http://localhost:${PORT}/metrics`);
+        console.log(`🔗 PeerJS: http://localhost:${PORT}/peerjs`);
+        
+        // Signal PM2 that app is ready
+        if (process.send) {
+            process.send('ready');
+        }
+    });
 });
 
 // Socket.io - Live Proctoring with Sample-Based Monitoring
