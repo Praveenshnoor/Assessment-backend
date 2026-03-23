@@ -742,11 +742,13 @@ router.post('/:id(\\d+)/reply', verifyAdmin, upload.single('image'), async (req,
     try {
         const { id } = req.params;
         const { message } = req.body;
+        const cleanedMessage = (message || '').trim();
+        const hasImage = !!req.file;
 
-        if (!message || !message.trim()) {
+        if (!cleanedMessage && !hasImage) {
             return res.status(400).json({
                 success: false,
-                message: 'Reply message is required'
+                message: 'Reply message or image is required'
             });
         }
 
@@ -764,6 +766,7 @@ router.post('/:id(\\d+)/reply', verifyAdmin, upload.single('image'), async (req,
         }
 
         const originalMessage = messageResult.rows[0];
+        const storedMessage = cleanedMessage || 'Image attachment';
         const imagePath = req.file ? `/uploads/student-messages/${req.file.filename}` : null;
 
         // Insert admin reply - set status to 'unread' so student sees it as new
@@ -775,7 +778,7 @@ router.post('/:id(\\d+)/reply', verifyAdmin, upload.single('image'), async (req,
             [
                 'Admin',
                 null,
-                message.trim(),
+                storedMessage,
                 originalMessage.topic,
                 imagePath,
                 originalMessage.student_id,
@@ -820,8 +823,8 @@ router.post('/:id(\\d+)/reply', verifyAdmin, upload.single('image'), async (req,
             const realtimePayload = {
                 id: result.rows[0].id,
                 studentId: originalMessage.student_id,
-                message: message.trim(),
-                messagePreview: message.trim().substring(0, 100) + (message.length > 100 ? '...' : ''),
+                message: storedMessage,
+                messagePreview: storedMessage.substring(0, 100) + (storedMessage.length > 100 ? '...' : ''),
                 createdAt: result.rows[0].created_at,
                 originalMessageId: id,
                 hasImage: !!imagePath
