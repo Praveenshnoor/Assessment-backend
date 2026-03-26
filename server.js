@@ -152,10 +152,13 @@ app.use('/api/student-messages', studentMessagesRoutes);
 // app.use('/api/coding-questions', codingQuestionsRoutes);
 app.use('/api/interviews', interviewsRoutes);
 
+const { WebSocketServer } = require('ws');
+
 // PeerJS signaling server
 const peerServer = ExpressPeerServer(server, {
     path: '/',
     allow_discovery: false,
+    createWebSocketServer: (options) => new WebSocketServer(options),
 });
 app.use('/peerjs', peerServer);
 
