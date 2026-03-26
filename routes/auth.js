@@ -417,8 +417,6 @@ router.post('/login', verifyToken, async (req, res) => {
         const firebase_uid = req.firebaseUid; // From verifyToken middleware
         const email = req.firebaseEmail; // From verifyToken middleware
 
-        console.log('[LOGIN] Attempting login for:', { firebase_uid, email });
-
         // Check if user is an admin (by email)
         const adminResult = await query(
             'SELECT id, email, full_name, created_at FROM admins WHERE email = $1',
@@ -427,7 +425,6 @@ router.post('/login', verifyToken, async (req, res) => {
 
         if (adminResult.rows.length > 0) {
             const admin = adminResult.rows[0];
-            console.log('[LOGIN] Admin found:', { id: admin.id, email: admin.email });
 
             // Generate JWT session token for admin (valid for 24 hours)
             const sessionToken = jwt.sign(
@@ -462,7 +459,6 @@ router.post('/login', verifyToken, async (req, res) => {
         );
 
         if (studentResult.rows.length === 0) {
-            console.log('[LOGIN] User not found in students or admins');
             return res.status(404).json({
                 success: false,
                 message: 'User profile not found. Please register first.',
@@ -470,7 +466,6 @@ router.post('/login', verifyToken, async (req, res) => {
         }
 
         const student = studentResult.rows[0];
-        console.log('[LOGIN] Student found:', { id: student.id, email: student.email });
 
         // Generate JWT session token for student (valid for 7 days)
         const sessionToken = jwt.sign(

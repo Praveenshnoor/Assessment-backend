@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const compression = require('compression');
 const http = require('http');
 const { Server } = require('socket.io');
 require('dotenv').config();
@@ -77,12 +78,14 @@ const allowedOrigins = [
     'https://assessments.shnoor.com'
 ].filter(Boolean); // Remove undefined values
 
+const allowedOriginsSet = new Set(allowedOrigins);
+
 app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
-        if (allowedOrigins.indexOf(origin) !== -1) {
+        if (allowedOriginsSet.has(origin)) {
             callback(null, true);
         } else {
             callback(new Error('Not allowed by CORS'));
@@ -93,6 +96,11 @@ app.use(cors({
 
 // Handle OPTIONS requests explicitly (CORS preflight)
 app.options('*', cors());
+
+app.use(compression({
+    threshold: 1024,
+    level: 6,
+}));
 
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
