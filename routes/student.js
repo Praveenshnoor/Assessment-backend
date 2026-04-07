@@ -391,49 +391,48 @@ router.get('/test/:testId', verifySession, async (req, res) => {
             };
         });
 
-        // DISABLED: CODE EXECUTION FEATURE
         // Fetch coding questions for this test
-        // let codingQuestions = [];
-        // try {
-        //     const codingQuestionsResult = await pool.query(
-        //         `SELECT id, title, description, time_limit, memory_limit, marks 
-        //          FROM coding_questions 
-        //          WHERE test_id = $1 
-        //          ORDER BY question_order ASC, id ASC`,
-        //         [testId]
-        //     );
+        let codingQuestions = [];
+        try {
+            const codingQuestionsResult = await pool.query(
+                `SELECT id, title, description, time_limit, memory_limit, marks 
+                 FROM coding_questions 
+                 WHERE test_id = $1 
+                 ORDER BY question_order ASC, id ASC`,
+                [testId]
+            );
 
-        //     console.log(`[Student Test] Found ${codingQuestionsResult.rows.length} coding questions for test ${testId}`);
+            console.log(`[Student Test] Found ${codingQuestionsResult.rows.length} coding questions for test ${testId}`);
 
-        //     // Get public test cases for each coding question
-        //     codingQuestions = await Promise.all(
-        //         codingQuestionsResult.rows.map(async (question) => {
-        //             const testCasesResult = await pool.query(
-        //                 `SELECT input, output, explanation 
-        //                  FROM coding_test_cases 
-        //                  WHERE coding_question_id = $1 AND is_hidden = false
-        //                  ORDER BY test_case_order ASC, id ASC`,
-        //                 [question.id]
-        //             );
+            // Get public test cases for each coding question
+            codingQuestions = await Promise.all(
+                codingQuestionsResult.rows.map(async (question) => {
+                    const testCasesResult = await pool.query(
+                        `SELECT input, output, explanation 
+                         FROM coding_test_cases 
+                         WHERE coding_question_id = $1 AND is_hidden = false
+                         ORDER BY test_case_order ASC, id ASC`,
+                        [question.id]
+                    );
 
-        //             return {
-        //                 id: question.id,
-        //                 title: question.title,
-        //                 description: question.description,
-        //                 timeLimit: parseFloat(question.time_limit),
-        //                 memoryLimit: question.memory_limit,
-        //                 marks: question.marks || 10,
-        //                 testCases: testCasesResult.rows
-        //             };
-        //         })
-        //     );
+                    return {
+                        id: question.id,
+                        title: question.title,
+                        description: question.description,
+                        timeLimit: parseFloat(question.time_limit),
+                        memoryLimit: question.memory_limit,
+                        marks: question.marks || 10,
+                        testCases: testCasesResult.rows
+                    };
+                })
+            );
 
-        //     console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
-        // } catch (codingError) {
-        //     console.error('[Student Test] Error fetching coding questions (table may not exist):', codingError.message);
-        //     // Continue without coding questions if table doesn't exist
-        //     codingQuestions = [];
-        // }
+            console.log('[Student Test] Coding questions prepared:', codingQuestions.length);
+        } catch (codingError) {
+            console.error('[Student Test] Error fetching coding questions (table may not exist):', codingError.message);
+            // Continue without coding questions if table doesn't exist
+            codingQuestions = [];
+        }
 
         // 3. Check for saved progress
         const progressResult = await pool.query(`
@@ -467,7 +466,7 @@ router.get('/test/:testId', verifySession, async (req, res) => {
                 description: test.description,
                 duration: test.duration || 60,
                 questions: questions,
-                // codingQuestions: codingQuestions,
+                codingQuestions: codingQuestions,
                 isAssigned: isAssigned
             },
             savedProgress: savedProgress

@@ -3,7 +3,8 @@ const util = require('util');
 const fs = require('fs').promises;
 const path = require('path');
 const os = require('os');
-const pLimit = require('p-limit');
+const _pLimitMod = require('p-limit');
+const pLimit = _pLimitMod.default || _pLimitMod;
 
 const execPromise = util.promisify(exec);
 

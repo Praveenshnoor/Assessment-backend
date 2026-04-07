@@ -28,9 +28,8 @@ const settingsRoutes = require('./routes/settings');
 const jobOpeningsRoutes = require('./routes/jobOpenings');
 const jobApplicationsRoutes = require('./routes/jobApplications');
 const studentMessagesRoutes = require('./routes/studentMessages');
-// DISABLED: Coding questions and code execution features
-// const codeExecutionRoutes = require('./routes/codeExecution.routes');
-// const codingQuestionsRoutes = require('./routes/codingQuestions.routes');
+const codeExecutionRoutes = require('./routes/codeExecution.routes');
+const codingQuestionsRoutes = require('./routes/codingQuestions.routes');
 const interviewsRoutes = require('./routes/interviews.routes');
 
 // Import middleware
@@ -148,9 +147,8 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/job-openings', jobOpeningsRoutes); // Job Openings & Off-Campus Hiring
 app.use('/api/job-applications', jobApplicationsRoutes); // Job Applications & Recruitment
 app.use('/api/student-messages', studentMessagesRoutes);
-// DISABLED: Coding questions and code execution features
-// app.use('/api/code', codeExecutionRoutes);
-// app.use('/api/coding-questions', codingQuestionsRoutes);
+app.use('/api/code', codeExecutionRoutes);
+app.use('/api/coding-questions', codingQuestionsRoutes);
 app.use('/api/interviews', interviewsRoutes);
 
 app.get('/', (req, res) => {
